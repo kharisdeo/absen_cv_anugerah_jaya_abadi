@@ -1,36 +1,63 @@
 flowchart TD
-    A([Mulai]) --> B[Pengguna membuka website]
+    A([Mulai]) --> B[Buka PWA]
     B --> C{Sudah login?}
-    C -- Tidak --> D[Login]
-    D --> E{Kredensial valid?}
-    E -- Tidak --> D
-    E -- Ya --> F[Dashboard]
-    C -- Ya --> F
-    F --> G{Pilih aksi}
-    G -- Check-in --> H{Sudah check-in hari ini?}
-    H -- Ya --> I[Tampilkan pesan duplikat]
-    H -- Tidak --> J[Ambil waktu server dan lokasi]
-    J --> K{Lokasi valid / diizinkan?}
-    K -- Tidak --> L[Tolak atau minta izin lokasi]
-    K -- Ya --> M[Simpan check-in]
-    M --> N[Hitung status hadir / terlambat]
-    N --> O[Tampilkan status berhasil]
-    G -- Check-out --> P{Sudah check-in?}
-    P -- Tidak --> Q[Tampilkan pesan: check-in diperlukan]
-    P -- Ya --> R[Simpan check-out]
-    R --> S[Hitung durasi dan status akhir]
-    S --> O
-    G -- Riwayat --> T[Tampilkan riwayat absensi]
-    G -- Izin / Koreksi --> U[Isi formulir pengajuan]
-    U --> V[Simpan status Pending]
-    V --> W[HR / Pimpinan memproses]
-    W --> X{Disetujui?}
-    X -- Ya --> Y[Perbarui status dan simpan audit]
-    X -- Tidak --> Z[Simpan alasan penolakan]
-    I --> AA([Selesai])
-    L --> AA
-    O --> AA
-    Q --> AA
-    T --> AA
-    Y --> AA
-    Z --> AA
+    C -- Tidak --> D[Login username/NIK + password]
+    D --> E{Valid?}
+    E -- Tidak --> F[Catat gagal login]
+    F --> G{5 kali gagal?}
+    G -- Ya --> H[Kunci akun 15 menit]
+    G -- Tidak --> D
+    H --> Z([Selesai])
+    E -- Ya --> I{Login pertama?}
+    I -- Ya --> J[Consent data + ganti password]
+    I -- Tidak --> K[Dashboard]
+    J --> K
+    C -- Ya --> K
+    K --> L{Pilih aksi}
+    L -- Absen masuk/pulang --> M[Buka kamera depan langsung]
+    M --> N[Selfie dari video stream]
+    N --> O{Wajah & liveness valid?}
+    O -- Tidak --> P[Ulangi instruksi liveness]
+    P --> N
+    O -- Ya --> Q[Ambil GPS sekali + waktu server]
+    Q --> R{Internet tersedia?}
+    R -- Tidak --> S[Enkripsi dan simpan di HP\nstatus Absen tertunda + kode bukti]
+    S --> T[Background sync saat online]
+    T --> U[Server cek selisih jam, usia data, GPS]
+    R -- Ya --> U[Server menerima selfie, GPS, device, IP]
+    U --> V{GPS valid?\njarak <= radius & akurasi <= batas}
+    V -- Ya --> W{Jenis absen valid?}
+    V -- Tidak --> X[Coba ulang GPS maksimal 60 detik]
+    X --> Y{Alternatif aktif?\nQR / Wi-Fi / supervisor}
+    Y -- Berhasil --> W
+    Y -- Tidak / gagal --> AA[Simpan waktu asli + selfie + lokasi terbaik]
+    AA --> AB[Status Perlu verifikasi]
+    W -- Masuk --> AC[Simpan Valid / Valid offline]
+    W -- Pulang --> AD{Sudah ada absen masuk\nshift yang sama?}
+    AD -- Tidak --> AE[Arahkan ke koreksi absensi]
+    AD -- Ya --> AC
+    AC --> AF[Hitung hadir, telat, pulang cepat, durasi]
+    AB --> AG[Admin/Supervisor tinjau <= 24 jam]
+    AG --> AH{Disetujui?}
+    AH -- Ya --> AF
+    AH -- Tidak --> AI[Tolak dengan alasan + audit log]
+    L -- Izin/lembur/koreksi --> AJ[Isi formulir + lampiran]
+    AJ --> AK[Simpan Pending + notifikasi]
+    AK --> AL[Admin/Supervisor proses]
+    AL --> AM{Disetujui?}
+    AM -- Ya --> AN[Perbarui status + audit log]
+    AM -- Tidak --> AI
+    L -- Riwayat --> AO[Tampilkan data pribadi]
+    L -- Dashboard admin --> AP[Filter toko/shift dan lihat rekap]
+    AP --> AQ{Akhir hari + 2 jam?}
+    AQ -- Ya --> AR{Tidak ada jejak absen, pengajuan,\nkoreksi, atau gangguan sistem?}
+    AR -- Ya --> AS[Tetapkan Tidak hadir]
+    AR -- Tidak --> AT[Jangan tetapkan Tidak hadir]
+    AQ -- Tidak --> Z
+    AF --> Z
+    AI --> Z
+    AN --> Z
+    AO --> Z
+    AS --> Z
+    AT --> Z
+    AE --> Z

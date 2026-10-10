@@ -1,99 +1,226 @@
 classDiagram
-    class User {
+    class UserAccount {
       +UUID id
-      +String employeeId
-      +String name
-      +String email
+      +String username
+      +String passwordHash
       +Role role
       +AccountStatus status
+      +DateTime lockedUntil
       +login()
       +logout()
+      +resetPassword()
     }
-    class Department {
+    class Employee {
+      +UUID id
+      +String nik
+      +String name
+      +String position
+      +Boolean active
+      +DateTime firstLoginAt
+    }
+    class DeviceBinding {
+      +UUID id
+      +String deviceId
+      +String deviceName
+      +BindingStatus status
+      +DateTime approvedAt
+    }
+    class StoreLocation {
       +UUID id
       +String name
+      +Decimal latitude
+      +Decimal longitude
+      +Int radiusMeters
+      +Int accuracyLimitMeters
+      +String wifiPublicIp
+      +Boolean active
+      +calculateDistance(location)
+      +isInsideGeofence(location)
     }
-    class WorkSchedule {
+    class WorkShift {
       +UUID id
       +String name
       +Time startTime
       +Time endTime
+      +Int breakMinutes
       +Int toleranceMinutes
-      +isLate(checkInAt)
+      +Set workingDays
+      +calculateLateMinutes(checkIn)
+    }
+    class ShiftAssignment {
+      +UUID id
+      +Date effectiveFrom
+      +Date effectiveTo
     }
     class Attendance {
       +UUID id
-      +Date date
-      +DateTime checkInAt
-      +DateTime checkOutAt
+      +AttendanceType type
+      +DateTime serverTime
+      +DateTime deviceTime
       +AttendanceStatus status
+      +ValidationStatus validationStatus
+      +AttendanceMethod method
+      +String networkStatus
+      +String proofCode
+      +Boolean assisted
+      +calculateDailyStatus()
+    }
+    class SelfieCapture {
+      +UUID id
+      +String privateObjectKey
+      +String signedUrl
+      +Int sizeKb
+      +String watermarkText
+      +Boolean faceDetected
+      +Boolean livenessPassed
+      +DateTime expiresAt
+    }
+    class LocationProof {
+      +UUID id
       +Decimal latitude
       +Decimal longitude
-      +checkIn()
-      +checkOut()
-      +calculateStatus()
+      +Decimal accuracyMeters
+      +Decimal distanceMeters
+      +Boolean mockDetected
+      +String source
     }
-    class LeaveRequest {
+    class AttendanceRequest {
       +UUID id
-      +LeaveType type
+      +RequestType type
       +Date startDate
       +Date endDate
       +String reason
+      +String attachmentKey
       +RequestStatus status
-      +submit()
-      +approve()
-      +reject()
+      +DateTime submittedAt
+      +approve(approverId)
+      +reject(approverId, reason)
     }
     class AttendanceCorrection {
       +UUID id
+      +UUID originalAttendanceId
       +DateTime proposedCheckIn
       +DateTime proposedCheckOut
       +String reason
+      +String evidenceKey
       +RequestStatus status
-      +submit()
-      +approve()
-      +reject()
     }
     class Holiday {
       +UUID id
       +Date date
       +String name
+      +UUID storeId
+    }
+    class SystemDisruption {
+      +UUID id
+      +DateTime startAt
+      +DateTime endAt
+      +UUID storeId
+      +String reason
+    }
+    class MonthlyRecap {
+      +UUID id
+      +YearMonth period
+      +RecapStatus status
+      +DateTime closedAt
+      +close(adminId)
+      +exportExcel(filter)
+    }
+    class Notification {
+      +UUID id
+      +String type
+      +String message
+      +Boolean read
+      +DateTime createdAt
     }
     class AuditLog {
       +UUID id
+      +UUID actorId
       +String action
       +String entity
-      +UUID entityId
-      +JSON metadata
+      +JSON beforeValue
+      +JSON afterValue
+      +String reason
+      +String ipAddress
+      +String deviceId
       +DateTime createdAt
+      +appendOnly()
     }
     class AttendanceService {
-      +checkIn(userId, location)
-      +checkOut(userId)
-      +getHistory(userId, filter)
+      +startAttendance(employeeId, type)
+      +captureSelfie()
+      +captureLocation()
+      +validateAttempt()
+      +queueOffline()
+      +syncPending()
     }
     class ApprovalService {
-      +approveLeave(requestId, approverId)
-      +rejectLeave(requestId, approverId, reason)
-      +approveCorrection(requestId, approverId)
-      +rejectCorrection(requestId, approverId, reason)
+      +reviewAttendance(attendanceId, approverId)
+      +approveRequest(requestId, approverId)
+      +rejectRequest(requestId, approverId, reason)
     }
     class ReportService {
-      +getAttendanceSummary(filter)
-      +exportCsv(filter)
+      +dailyDashboard(filter)
+      +monthlySummary(filter)
+      +exportXlsx(filter)
+      +closePeriod(period, adminId)
     }
-    User "0..*" --> "1" Department : belongs to
-    User "0..*" --> "1" WorkSchedule : assigned schedule
-    User "1" --> "0..*" Attendance : owns
-    User "1" --> "0..*" LeaveRequest : submits
-    User "1" --> "0..*" AttendanceCorrection : submits
-    Attendance "1" --> "0..*" AttendanceCorrection : may have
-    User "1" --> "0..*" AuditLog : creates
-    User "1" --> "0..*" LeaveRequest : approves
-    User "1" --> "0..*" AttendanceCorrection : approves
+    class BackupService {
+      +dailyBackup()
+      +weeklyBackup()
+      +restoreTest()
+    }
+    class Role {
+      <<enumeration>>
+      ADMIN
+      SUPERVISOR
+      EMPLOYEE
+    }
+    class ValidationStatus {
+      <<enumeration>>
+      VALID
+      PENDING_VERIFICATION
+      APPROVED
+      REJECTED
+      PENDING_OFFLINE
+    }
+    class RequestType {
+      <<enumeration>>
+      LEAVE
+      SICK
+      ANNUAL_LEAVE
+      OVERTIME
+      CORRECTION
+    }
+    UserAccount "1" --> "1" Employee : authenticates
+    Employee "1" --> "0..1" DeviceBinding : registered device
+    Employee "1" --> "0..*" StoreLocation : assigned stores
+    Employee "1" --> "0..*" ShiftAssignment : receives
+    ShiftAssignment "*" --> "1" WorkShift : uses
+    ShiftAssignment "*" --> "1" StoreLocation : at store
+    Employee "1" --> "0..*" Attendance : owns
+    Attendance "1" --> "1" SelfieCapture : contains
+    Attendance "1" --> "1" LocationProof : contains
+    Attendance "0..*" --> "0..1" AttendanceRequest : may resolve request
+    AttendanceCorrection "*" --> "1" Attendance : references original
+    Employee "1" --> "0..*" AttendanceRequest : submits
+    Employee "1" --> "0..*" AttendanceCorrection : submits
+    AttendanceRequest "0..*" --> "0..1" Employee : approved by
+    StoreLocation "1" --> "0..*" Holiday : has
+    StoreLocation "1" --> "0..*" SystemDisruption : affected by
+    Employee "1" --> "0..*" Notification : receives
+    UserAccount "1" --> "0..*" AuditLog : creates
+    MonthlyRecap "1" --> "0..*" Attendance : summarizes
     AttendanceService ..> Attendance : manages
-    AttendanceService ..> WorkSchedule : validates
-    ApprovalService ..> LeaveRequest : processes
-    ApprovalService ..> AttendanceCorrection : processes
-    ReportService ..> Attendance : reads
-    ReportService ..> User : filters
+    AttendanceService ..> SelfieCapture : camera/liveness
+    AttendanceService ..> LocationProof : GPS/geofence
+    AttendanceService ..> DeviceBinding : checks
+    ApprovalService ..> AttendanceRequest : processes
+    ApprovalService ..> Attendance : verifies
+    ReportService ..> MonthlyRecap : builds
+    ReportService ..> AuditLog : records closing/export
+    BackupService ..> UserAccount : backs up
+    BackupService ..> Attendance : backs up
+    UserAccount --> Role
+    Attendance --> ValidationStatus
+    AttendanceRequest --> RequestType

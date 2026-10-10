@@ -1,9 +1,9 @@
-# Dokumen Analisis Sistem Absensi
+# Dokumentasi Website Absensi CV Anugerah Jaya Abadi
 
-- [PRD lengkap dan seluruh diagram](./PRD-dan-diagram-absensi.md)
-- [PRD ringkas](./PRD.md)
-- [Use case diagram](./use-case-diagram.puml)
-- [Flowchart absensi](./flowchart-absensi.mmd)
-- [Class diagram](./class-diagram.mmd)
+Dokumentasi ini dibuat ulang berdasarkan requirement pada PDF SRS.
 
-Diagram dapat dirender dengan PlantUML atau Mermaid sesuai ekstensi file.
+- [PRD](./PRD.md)
+- [Paket PRD dan diagram](./PRD-dan-diagram-absensi.md)
+- [Use case diagram - PlantUML](./use-case-diagram.puml)
+- [Flowchart - Mermaid](./flowchart-absensi.mmd)
+- [Class diagram - Mermaid](./class-diagram.mmd)
