@@ -1,0 +1,99 @@
+classDiagram
+    class User {
+      +UUID id
+      +String employeeId
+      +String name
+      +String email
+      +Role role
+      +AccountStatus status
+      +login()
+      +logout()
+    }
+    class Department {
+      +UUID id
+      +String name
+    }
+    class WorkSchedule {
+      +UUID id
+      +String name
+      +Time startTime
+      +Time endTime
+      +Int toleranceMinutes
+      +isLate(checkInAt)
+    }
+    class Attendance {
+      +UUID id
+      +Date date
+      +DateTime checkInAt
+      +DateTime checkOutAt
+      +AttendanceStatus status
+      +Decimal latitude
+      +Decimal longitude
+      +checkIn()
+      +checkOut()
+      +calculateStatus()
+    }
+    class LeaveRequest {
+      +UUID id
+      +LeaveType type
+      +Date startDate
+      +Date endDate
+      +String reason
+      +RequestStatus status
+      +submit()
+      +approve()
+      +reject()
+    }
+    class AttendanceCorrection {
+      +UUID id
+      +DateTime proposedCheckIn
+      +DateTime proposedCheckOut
+      +String reason
+      +RequestStatus status
+      +submit()
+      +approve()
+      +reject()
+    }
+    class Holiday {
+      +UUID id
+      +Date date
+      +String name
+    }
+    class AuditLog {
+      +UUID id
+      +String action
+      +String entity
+      +UUID entityId
+      +JSON metadata
+      +DateTime createdAt
+    }
+    class AttendanceService {
+      +checkIn(userId, location)
+      +checkOut(userId)
+      +getHistory(userId, filter)
+    }
+    class ApprovalService {
+      +approveLeave(requestId, approverId)
+      +rejectLeave(requestId, approverId, reason)
+      +approveCorrection(requestId, approverId)
+      +rejectCorrection(requestId, approverId, reason)
+    }
+    class ReportService {
+      +getAttendanceSummary(filter)
+      +exportCsv(filter)
+    }
+    User "0..*" --> "1" Department : belongs to
+    User "0..*" --> "1" WorkSchedule : assigned schedule
+    User "1" --> "0..*" Attendance : owns
+    User "1" --> "0..*" LeaveRequest : submits
+    User "1" --> "0..*" AttendanceCorrection : submits
+    Attendance "1" --> "0..*" AttendanceCorrection : may have
+    User "1" --> "0..*" AuditLog : creates
+    User "1" --> "0..*" LeaveRequest : approves
+    User "1" --> "0..*" AttendanceCorrection : approves
+    AttendanceService ..> Attendance : manages
+    AttendanceService ..> WorkSchedule : validates
+    ApprovalService ..> LeaveRequest : processes
+    ApprovalService ..> AttendanceCorrection : processes
+    ReportService ..> Attendance : reads
+    ReportService ..> User : filters

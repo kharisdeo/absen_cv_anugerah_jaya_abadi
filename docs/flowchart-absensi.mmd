@@ -1,0 +1,36 @@
+flowchart TD
+    A([Mulai]) --> B[Pengguna membuka website]
+    B --> C{Sudah login?}
+    C -- Tidak --> D[Login]
+    D --> E{Kredensial valid?}
+    E -- Tidak --> D
+    E -- Ya --> F[Dashboard]
+    C -- Ya --> F
+    F --> G{Pilih aksi}
+    G -- Check-in --> H{Sudah check-in hari ini?}
+    H -- Ya --> I[Tampilkan pesan duplikat]
+    H -- Tidak --> J[Ambil waktu server dan lokasi]
+    J --> K{Lokasi valid / diizinkan?}
+    K -- Tidak --> L[Tolak atau minta izin lokasi]
+    K -- Ya --> M[Simpan check-in]
+    M --> N[Hitung status hadir / terlambat]
+    N --> O[Tampilkan status berhasil]
+    G -- Check-out --> P{Sudah check-in?}
+    P -- Tidak --> Q[Tampilkan pesan: check-in diperlukan]
+    P -- Ya --> R[Simpan check-out]
+    R --> S[Hitung durasi dan status akhir]
+    S --> O
+    G -- Riwayat --> T[Tampilkan riwayat absensi]
+    G -- Izin / Koreksi --> U[Isi formulir pengajuan]
+    U --> V[Simpan status Pending]
+    V --> W[HR / Pimpinan memproses]
+    W --> X{Disetujui?}
+    X -- Ya --> Y[Perbarui status dan simpan audit]
+    X -- Tidak --> Z[Simpan alasan penolakan]
+    I --> AA([Selesai])
+    L --> AA
+    O --> AA
+    Q --> AA
+    T --> AA
+    Y --> AA
+    Z --> AA

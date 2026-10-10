@@ -1,0 +1,60 @@
+@startuml
+left to right direction
+skinparam packageStyle rectangle
+
+actor "Karyawan" as Employee
+actor "HR / Admin" as HR
+actor "Pimpinan" as Manager
+actor "Layanan Lokasi" as Location
+
+rectangle "Sistem Absensi CV Anugerah Jaya Abadi" {
+  usecase "Login / Logout" as UC1
+  usecase "Lihat Dashboard" as UC2
+  usecase "Check-in" as UC3
+  usecase "Check-out" as UC4
+  usecase "Lihat Riwayat Absensi" as UC5
+  usecase "Ajukan Izin" as UC6
+  usecase "Ajukan Koreksi Absensi" as UC7
+  usecase "Kelola Data Karyawan" as UC8
+  usecase "Kelola Jadwal & Hari Libur" as UC9
+  usecase "Monitor Absensi" as UC10
+  usecase "Proses Izin" as UC11
+  usecase "Proses Koreksi" as UC12
+  usecase "Lihat & Ekspor Laporan" as UC13
+  usecase "Kelola Role & Hak Akses" as UC14
+  usecase "Catat Audit Log" as UC15
+  usecase "Validasi Lokasi" as UC16
+}
+
+Employee --> UC1
+Employee --> UC2
+Employee --> UC3
+Employee --> UC4
+Employee --> UC5
+Employee --> UC6
+Employee --> UC7
+HR --> UC1
+HR --> UC2
+HR --> UC8
+HR --> UC9
+HR --> UC10
+HR --> UC11
+HR --> UC12
+HR --> UC13
+HR --> UC14
+Manager --> UC1
+Manager --> UC2
+Manager --> UC10
+Manager --> UC11
+Manager --> UC12
+Manager --> UC13
+Location --> UC16
+UC3 .> UC16 : <<include>>
+UC4 .> UC16 : <<include>>
+UC3 .> UC15 : <<include>>
+UC4 .> UC15 : <<include>>
+UC6 .> UC15 : <<include>>
+UC7 .> UC15 : <<include>>
+UC11 .> UC15 : <<include>>
+UC12 .> UC15 : <<include>>
+@enduml
