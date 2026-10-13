@@ -1,0 +1,34 @@
+.attendance-result {
+  border: 1px solid #83ad9c;
+  border-left: 4px solid #267150;
+  border-radius: 0.9rem;
+  background: #f0f8f4;
+  color: #173c2f;
+  padding: 1rem 1.15rem;
+}
+
+.attendance-result h3 {
+  margin: 0.35rem 0;
+}
+
+.attendance-result p {
+  margin: 0.4rem 0 0;
+}
+
+.attendance-result__receipt {
+  font-size: 0.9rem;
+}
+
+.attendance-result--pending_verification {
+  border-color: #bc9a51;
+  border-left-color: #8a671e;
+  background: #fff9e9;
+  color: #4c3a12;
+}
+
+.attendance-result--rejected {
+  border-color: #bd807a;
+  border-left-color: #92362e;
+  background: #fff2f0;
+  color: #55201b;
+}

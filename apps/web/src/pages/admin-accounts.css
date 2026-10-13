@@ -1,0 +1,293 @@
+.admin-accounts-page {
+  display: grid;
+  gap: 22px;
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 10px 0 44px;
+}
+
+.admin-accounts-header,
+.admin-account-list__header,
+.admin-account-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.admin-accounts-header h1 {
+  margin: 6px 0 8px;
+  color: var(--ink, #1d2927);
+  font-size: clamp(28px, 4vw, 38px);
+  letter-spacing: -0.035em;
+}
+
+.admin-accounts-header p,
+.admin-account-list__header > p {
+  max-width: 680px;
+  margin: 0;
+  color: var(--muted, #73817d);
+  line-height: 1.6;
+}
+
+.admin-accounts-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line, #e6ece9);
+}
+
+.admin-accounts-tabs button {
+  min-height: 46px;
+  flex: 0 0 auto;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  padding: 10px 14px 8px;
+  background: transparent;
+  color: var(--muted, #73817d);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.admin-accounts-tabs button:hover,
+.admin-accounts-tabs button:focus-visible {
+  color: var(--ink, #1d2927);
+}
+
+.admin-accounts-tabs button:focus-visible,
+.admin-accounts-inline-action:focus-visible {
+  outline: 3px solid rgb(28 112 91 / 35%);
+  outline-offset: 2px;
+}
+
+.admin-accounts-tabs button.is-active {
+  border-bottom-color: var(--accent, #1c705b);
+  color: var(--ink, #1d2927);
+}
+
+.admin-account-list,
+.admin-device-list {
+  display: grid;
+  gap: 17px;
+  min-width: 0;
+  border: 1px solid var(--line, #e6ece9);
+  border-radius: 18px;
+  padding: 20px;
+  background: var(--paper, #fff);
+  box-shadow: var(--shadow, 0 20px 60px rgb(28 54 47 / 7%));
+}
+
+.admin-account-list__header {
+  align-items: end;
+}
+
+.admin-account-list__header h2 {
+  margin: 4px 0 0;
+  font-size: 20px;
+}
+
+.admin-account-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.admin-account-card,
+.admin-device-card {
+  display: grid;
+  align-content: start;
+  gap: 15px;
+  min-width: 0;
+  border: 1px solid #e4ebe8;
+  border-radius: 14px;
+  padding: 16px;
+  background: #fff;
+}
+
+.admin-account-card__header h3,
+.admin-device-card h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.admin-account-card__header p,
+.admin-device-card p {
+  margin: 5px 0 0;
+  color: var(--muted, #73817d);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.admin-account-status {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  flex: 0 0 auto;
+  border: 1px solid #d6e4de;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: #eef7f2;
+  color: #245d49;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.admin-account-status--inactive,
+.admin-account-status--suspended {
+  border-color: #e4e8e6;
+  background: #f4f6f5;
+  color: #626e69;
+}
+
+.admin-account-status--pending {
+  border-color: #f0dfb7;
+  background: #fff8e9;
+  color: #795611;
+}
+
+.admin-account-card__facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.admin-account-card__facts div {
+  min-width: 0;
+}
+
+.admin-account-card__facts dt {
+  margin-bottom: 4px;
+  color: var(--muted, #73817d);
+  font-size: 12px;
+}
+
+.admin-account-card__facts dd {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.admin-account-card__actions,
+.admin-account-form__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+.admin-account-form,
+.admin-account-confirmation,
+.admin-account-credential {
+  display: grid;
+  gap: 16px;
+}
+
+.admin-account-form__employee {
+  display: grid;
+  gap: 7px;
+}
+
+.admin-account-form__optional {
+  color: var(--muted, #73817d);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.admin-account-form__hint,
+.admin-account-form > p,
+.admin-account-confirmation p,
+.admin-account-confirmation ul,
+.admin-account-credential p {
+  margin: 0;
+  color: var(--muted, #73817d);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.admin-account-confirmation ul {
+  padding-left: 21px;
+}
+
+.admin-account-confirmation li + li {
+  margin-top: 4px;
+}
+
+.admin-account-credential__warning {
+  border-left: 3px solid #d39a2c;
+  padding-left: 12px;
+  color: #6c521c !important;
+}
+
+.admin-account-credential__value {
+  overflow-wrap: anywhere;
+  border: 1px solid #dbe6e1;
+  border-radius: 12px;
+  padding: 14px;
+  background: #f4f8f6;
+  color: #193d33;
+  font-size: 16px;
+  user-select: all;
+}
+
+.admin-account-credential__value code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.admin-accounts-inline-action {
+  display: block;
+  margin-top: 8px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 750;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+@media (max-width: 850px) {
+  .admin-account-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-account-list,
+  .admin-device-list {
+    padding: 15px;
+  }
+}
+
+@media (max-width: 600px) {
+  .admin-accounts-page {
+    gap: 17px;
+  }
+
+  .admin-accounts-header,
+  .admin-account-list__header,
+  .admin-account-card__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-account-card__facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-account-card__actions,
+  .admin-account-form__actions {
+    flex-direction: column-reverse;
+  }
+
+  .admin-account-card__actions .ds-button,
+  .admin-account-form__actions .ds-button {
+    width: 100%;
+  }
+}

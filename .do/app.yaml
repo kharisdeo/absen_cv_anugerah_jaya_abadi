@@ -1,0 +1,76 @@
+# Local deployment template only. Applying this spec creates paid App Platform resources.
+# Do not create/update an App until the staging prerequisites and cost have been approved.
+name: absen-aj-staging
+region: sgp
+
+ingress:
+  rules:
+    - match:
+        path:
+          prefix: /api
+      component:
+        name: api
+        preserve_path_prefix: true
+    - match:
+        path:
+          prefix: /
+      component:
+        name: web
+
+services:
+  - name: api
+    github:
+      repo: kharisdeo/absen_cv_anugerah_jaya_abadi
+      branch: main
+      deploy_on_push: false
+    source_dir: /
+    environment_slug: node-js
+    run_command: pnpm --filter @absen/api start
+    instance_size_slug: apps-s-1vcpu-1gb-fixed
+    http_port: 3000
+    health_check:
+      http_path: /api/v1/health
+      port: 3000
+      initial_delay_seconds: 10
+      period_seconds: 10
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 5
+    envs:
+      - key: NODE_ENV
+        value: staging
+        scope: RUN_TIME
+        type: GENERAL
+      - key: APP_VERSION
+        value: ${_self.COMMIT_HASH}
+        scope: RUN_TIME
+        type: GENERAL
+      - key: HOST
+        value: 0.0.0.0
+        scope: RUN_TIME
+        type: GENERAL
+      - key: TIMEZONE
+        value: Asia/Jakarta
+        scope: RUN_TIME
+        type: GENERAL
+      - key: LOG_LEVEL
+        value: info
+        scope: RUN_TIME
+        type: GENERAL
+
+static_sites:
+  - name: web
+    github:
+      repo: kharisdeo/absen_cv_anugerah_jaya_abadi
+      branch: main
+      deploy_on_push: false
+    source_dir: /
+    environment_slug: node-js
+    output_dir: apps/web/dist
+    index_document: index.html
+    catchall_document: index.html
+    envs:
+      - key: VITE_API_BASE_URL
+        value: /api/v1
+        scope: BUILD_TIME
+        type: GENERAL

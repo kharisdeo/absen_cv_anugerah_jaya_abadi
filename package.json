@@ -1,0 +1,39 @@
+{
+  "name": "absen-cv-anugerah-jaya-abadi",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @absen/api dev",
+    "dev:web": "pnpm --filter @absen/web dev",
+    "dev:all": "pnpm --parallel --filter @absen/api --filter @absen/web dev",
+    "start": "pnpm --filter @absen/api start",
+    "db:start": "docker compose up --detach --wait postgres",
+    "db:stop": "docker compose stop postgres",
+    "db:generate": "pnpm --filter @absen/api db:generate",
+    "db:migrate:dev": "pnpm --filter @absen/api db:migrate:dev",
+    "db:migrate:status": "pnpm --filter @absen/api db:migrate:status",
+    "db:seed": "tsx apps/api/prisma/seed.ts",
+    "format": "prettier --write \"apps/**/*.{ts,tsx,json,css,html}\" \"*.{json,js,mjs,yml}\" compose.yaml pnpm-workspace.yaml README.md docs/DECISIONS.md docs/API.md docs/TODO-implementation-plan.md docs/openapi.yaml",
+    "format:check": "prettier --check \"apps/**/*.{ts,tsx,json,css,html}\" \"*.{json,js,mjs,yml}\" compose.yaml pnpm-workspace.yaml README.md docs/DECISIONS.md docs/API.md docs/TODO-implementation-plan.md docs/openapi.yaml",
+    "lint": "eslint .",
+    "typecheck": "pnpm --recursive --if-present typecheck",
+    "test": "pnpm --recursive --if-present test",
+    "build": "pnpm --recursive --if-present build",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^5.0.0"
+  }
+}

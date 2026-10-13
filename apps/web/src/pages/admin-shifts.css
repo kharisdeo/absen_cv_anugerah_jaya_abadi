@@ -1,0 +1,228 @@
+.admin-shifts-page {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
+.admin-shifts-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.admin-shifts-header h1 {
+  margin: 5px 0 0;
+  font-size: clamp(25px, 3vw, 34px);
+  letter-spacing: -0.035em;
+}
+
+.admin-shifts-header p {
+  margin: 8px 0 0;
+  color: var(--muted, #73817d);
+  line-height: 1.55;
+}
+
+.admin-shift-list {
+  display: grid;
+  gap: 16px;
+}
+
+.admin-shift-list__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.admin-shift-list__heading h2 {
+  margin: 4px 0 0;
+  font-size: 20px;
+  letter-spacing: -0.02em;
+}
+
+.admin-shift-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.admin-shift-card {
+  display: grid;
+  min-width: 0;
+  gap: 17px;
+  border: 1px solid var(--line, #e6ece9);
+  border-radius: 17px;
+  padding: 18px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgb(22 53 46 / 5%);
+}
+
+.admin-shift-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-shift-card__header h2 {
+  min-width: 0;
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 19px;
+  letter-spacing: -0.02em;
+}
+
+.admin-shift-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.admin-shift-facts > div {
+  min-width: 0;
+  border-radius: 12px;
+  padding: 11px 12px;
+  background: #f5f8f7;
+}
+
+.admin-shift-facts dt {
+  margin-bottom: 5px;
+  color: var(--muted, #73817d);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.admin-shift-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-shift-facts__days {
+  grid-column: 1 / -1;
+}
+
+.admin-shift-card__actions,
+.admin-shift-form__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+.admin-shift-form {
+  display: grid;
+  gap: 15px;
+}
+
+.admin-shift-form__times,
+.admin-shift-form__minutes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.admin-shift-weekdays {
+  min-width: 0;
+  margin: 0;
+  border: 1px solid var(--line, #e6ece9);
+  border-radius: 13px;
+  padding: 13px;
+}
+
+.admin-shift-weekdays legend {
+  padding: 0 5px;
+  color: var(--ink, #1d2927);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.admin-shift-weekdays__hint,
+.admin-shift-form__hint {
+  margin: 0;
+  color: var(--muted, #73817d);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.admin-shift-weekdays__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 11px;
+}
+
+.admin-shift-weekdays__option {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #ccd9d4;
+  border-radius: 999px;
+  padding: 7px 11px;
+  background: #fff;
+  color: var(--ink, #1d2927);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.admin-shift-weekdays__option:focus-within {
+  outline: 3px solid #d09338;
+  outline-offset: 2px;
+}
+
+.admin-shift-weekdays__option input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--green, #123c36);
+}
+
+.admin-shift-weekdays__error {
+  display: block;
+  margin-top: 9px;
+  color: #a52c32;
+  font-size: 12px;
+}
+
+@media (max-width: 800px) {
+  .admin-shift-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .admin-shifts-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .admin-shifts-header > .ds-button {
+    width: 100%;
+  }
+
+  .admin-shift-card {
+    padding: 15px;
+  }
+
+  .admin-shift-form__times,
+  .admin-shift-form__minutes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-shift-card__actions,
+  .admin-shift-form__actions {
+    flex-direction: column-reverse;
+  }
+
+  .admin-shift-card__actions .ds-button,
+  .admin-shift-form__actions .ds-button {
+    width: 100%;
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "@absen/web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host localhost",
+    "build": "tsc --noEmit -p tsconfig.json && vite build && node scripts/check-performance-budget.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "icons:generate": "node scripts/generate-icons.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-router-dom": "^7.18.4"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "fake-indexeddb": "6.2.5",
+    "happy-dom": "20.11.2",
+    "vite": "^8.3.4",
+    "vite-plugin-pwa": "^2.0.0",
+    "workbox-window": "^7.4.1"
+  }
+}

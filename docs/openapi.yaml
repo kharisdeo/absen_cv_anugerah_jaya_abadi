@@ -1,0 +1,2749 @@
+openapi: 3.1.0
+info:
+  title: API Absensi CV Anugerah Jaya Abadi
+  version: 0.1.0
+  description: >-
+    Kontrak machine-readable untuk route yang saat ini diregistrasikan pada
+    `apps/api/src/routes`. Endpoint koreksi, penutupan bulanan, dan fitur lain yang
+    belum memiliki route tidak dicantumkan sebagai API aktif. Detail
+    aturan bisnis dan privasi ada di `docs/API.md`.
+servers:
+  - url: /api/v1
+    description: Prefix API versi aktif
+tags:
+  - name: Health
+  - name: Auth
+  - name: Consent
+  - name: Accounts
+  - name: Employees
+  - name: Stores
+  - name: Devices
+  - name: Schedule
+  - name: Attendance
+  - name: Requests
+  - name: Dashboard
+  - name: Reports
+  - name: Notifications
+  - name: Audit
+  - name: System disruption
+security:
+  - sessionCookie: []
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Periksa liveness proses API
+      description: Liveness proses yang tidak memeriksa database atau dependensi eksternal.
+      security: []
+      responses:
+        '200':
+          description: API tersedia; header versi hanya dikirim jika APP_VERSION dikonfigurasi
+          headers:
+            X-App-Version:
+              description: >-
+                Identifier build dari APP_VERSION. Tidak ada jika tidak dikonfigurasi; deployment
+                sebaiknya mengisi ID commit immutable.
+              schema:
+                type: string
+                maxLength: 128
+                pattern: '^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$'
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [status]
+                properties:
+                  status: { type: string, const: ok }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /ready:
+    get:
+      tags: [Health]
+      operationId: getReadiness
+      summary: Periksa readiness database API
+      description: >-
+        Mengembalikan status generik tanpa informasi koneksi. Probe tidak memerlukan sesi;
+        response selalu no-store. Jika database tidak dikonfigurasi atau query readiness gagal,
+        respons adalah 503.
+      security: []
+      responses:
+        '200':
+          description: Query readiness database berhasil
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [status]
+                properties:
+                  status: { type: string, const: ok }
+        '503':
+          description: Database tidak tersedia atau query readiness gagal
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [status]
+                properties:
+                  status: { type: string, const: unavailable }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Masuk dan membuat sesi
+      description: Cookie sesi ditetapkan oleh server sebagai HttpOnly, signed, SameSite=Strict.
+      security: []
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginInput' }
+      responses:
+        '200':
+          description: Login berhasil; cookie sesi disetel
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: Cookie HttpOnly `absen_session`; token tidak ada di body.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSessionResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+  /auth/me:
+    get:
+      tags: [Auth]
+      operationId: getCurrentUser
+      summary: Ambil pengguna dari sesi aktif
+      responses:
+        '200':
+          description: Pengguna aktif
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSessionResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Akhiri sesi aktif
+      x-requires-same-origin: true
+      responses:
+        '204': { description: Sesi diakhiri dan cookie dihapus }
+        default: { $ref: '#/components/responses/Problem' }
+  /auth/change-password:
+    post:
+      tags: [Auth]
+      operationId: changePassword
+      summary: Ganti password akun sendiri
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangePasswordInput' }
+      responses:
+        '200':
+          description: Password diganti dan sesi baru diterbitkan
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: Cookie sesi baru.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSessionResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+  /auth/admin/accounts/{accountId}/reset-password:
+    post:
+      tags: [Auth]
+      operationId: adminResetAccountPassword
+      summary: Atur password sementara akun
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResetPasswordInput' }
+      responses:
+        '200':
+          description: Password diubah; pengguna wajib menggantinya saat masuk
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [accountId, mustChangePassword]
+                properties:
+                  accountId: { type: string, format: uuid }
+                  mustChangePassword: { type: boolean, const: true }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /consents/current:
+    get:
+      tags: [Consent]
+      operationId: getCurrentConsentPolicy
+      summary: Ambil kebijakan privasi aktif
+      responses:
+        '200':
+          description: Kebijakan dan status persetujuan akun sesi
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConsentCurrentResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+  /consents:
+    post:
+      tags: [Consent]
+      operationId: acceptConsent
+      summary: Catat persetujuan kebijakan aktif
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConsentAcceptInput' }
+      responses:
+        '200':
+          description: Persetujuan tercatat atau sebelumnya telah tercatat
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConsentAcceptResponse' }
+        default: { $ref: '#/components/responses/Problem' }
+  /consents/history:
+    get:
+      tags: [Consent]
+      operationId: listConsentHistory
+      summary: Lihat riwayat persetujuan
+      description: Akun non-Admin hanya dapat melihat riwayatnya sendiri.
+      parameters:
+        - name: accountId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/Page'
+        - name: pageSize
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: Halaman riwayat consent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConsentHistoryPage' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/accounts:
+    get:
+      tags: [Accounts]
+      operationId: listAccounts
+      summary: Daftar akun
+      x-required-roles: [ADMIN]
+      responses:
+        '200':
+          description: Daftar DTO akun tanpa kredensial
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Account' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Accounts]
+      operationId: createAccount
+      summary: Buat akun dan password sementara
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AccountCreateInput' }
+      responses:
+        '201':
+          description: Akun dibuat; password sementara hanya dikembalikan saat pembuatan
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [account, temporaryPassword]
+                properties:
+                  account: { $ref: '#/components/schemas/Account' }
+                  temporaryPassword: { type: string }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/accounts/{accountId}:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+    get:
+      tags: [Accounts]
+      operationId: getAccount
+      summary: Detail akun
+      x-required-roles: [ADMIN]
+      responses:
+        '200':
+          description: DTO akun
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Accounts]
+      operationId: updateAccount
+      summary: Ubah data akun
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AccountUpdateInput' }
+      responses:
+        '200':
+          description: DTO akun terbaru
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/accounts/{accountId}/deactivate:
+    post:
+      tags: [Accounts]
+      operationId: deactivateAccount
+      summary: Nonaktifkan akun
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      responses:
+        '200':
+          description: DTO akun nonaktif
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/employees:
+    get:
+      tags: [Employees]
+      operationId: listEmployees
+      summary: Daftar karyawan
+      x-required-roles: [ADMIN]
+      responses:
+        '200':
+          description: Daftar karyawan
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Employee' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Employees]
+      operationId: createEmployee
+      summary: Buat data karyawan
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EmployeeCreateInput' }
+      responses:
+        '201':
+          description: Karyawan dibuat
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Employee' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/employees/{employeeId}:
+    parameters:
+      - $ref: '#/components/parameters/EmployeeId'
+    get:
+      tags: [Employees]
+      operationId: getEmployee
+      summary: Detail karyawan
+      x-required-roles: [ADMIN]
+      responses:
+        '200':
+          description: DTO karyawan
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Employee' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Employees]
+      operationId: updateEmployee
+      summary: Ubah data karyawan
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EmployeeUpdateInput' }
+      responses:
+        '200':
+          description: DTO karyawan terbaru
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Employee' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/employees/{employeeId}/deactivate:
+    post:
+      tags: [Employees]
+      operationId: deactivateEmployee
+      summary: Nonaktifkan karyawan
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      parameters:
+        - $ref: '#/components/parameters/EmployeeId'
+      responses:
+        '200':
+          description: DTO karyawan nonaktif
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Employee' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/stores:
+    get:
+      tags: [Stores]
+      operationId: listStores
+      summary: Daftar toko
+      x-required-roles: [ADMIN]
+      responses:
+        '200':
+          description: Daftar toko
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Store' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Stores]
+      operationId: createStore
+      summary: Buat toko
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StoreCreateInput' }
+      responses:
+        '201':
+          description: Toko dibuat
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Store' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/stores/{storeId}:
+    parameters:
+      - $ref: '#/components/parameters/StoreId'
+    get:
+      tags: [Stores]
+      operationId: getStore
+      summary: Detail toko
+      x-required-roles: [ADMIN]
+      responses:
+        '200':
+          description: DTO toko
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Store' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Stores]
+      operationId: updateStore
+      summary: Ubah data toko dan parameter validasi lokasi
+      description: Perubahan koordinat/radius/akurasi/Wi-Fi harus dikonfirmasi Admin pada UI.
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StoreUpdateInput' }
+      responses:
+        '200':
+          description: DTO toko terbaru
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Store' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/stores/{storeId}/deactivate:
+    post:
+      tags: [Stores]
+      operationId: deactivateStore
+      summary: Nonaktifkan toko
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      parameters:
+        - $ref: '#/components/parameters/StoreId'
+      responses:
+        '200':
+          description: DTO toko nonaktif
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Store' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/stores/{storeId}/assignments:
+    get:
+      tags: [Stores]
+      operationId: listStoreEmployeeAssignments
+      summary: Daftar penempatan karyawan pada toko
+      x-required-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/StoreId'
+      responses:
+        '200':
+          description: Daftar assignment toko-karyawan
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/StoreEmployeeAssignment' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/stores/{storeId}/assignments/{employeeId}:
+    parameters:
+      - $ref: '#/components/parameters/StoreId'
+      - $ref: '#/components/parameters/EmployeeId'
+    put:
+      tags: [Stores]
+      operationId: assignEmployeeToStore
+      summary: Tetapkan karyawan ke toko
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      responses:
+        '200':
+          description: Assignment aktif
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StoreEmployeeAssignment' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Stores]
+      operationId: removeEmployeeFromStore
+      summary: Hapus penempatan karyawan dari toko
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      responses:
+        '204': { description: Assignment dihapus }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/audit-logs:
+    get:
+      tags: [Audit]
+      operationId: listAdminAuditLogs
+      summary: Cari audit log secara read-only
+      description: >-
+        Hanya Admin dengan sesi cookie server-side. Parameter query tidak dikenal ditolak.
+        from dan to bersifat inklusif dan wajib ISO timestamp berzona waktu. page dibatasi
+        1-10000; pageSize dibatasi 1-100. Default rate limit 30 request per menit dan
+        response memakai Cache-Control: no-store. Tidak ada route mutasi audit log.
+      x-required-roles: [ADMIN]
+      parameters:
+        - name: actorUserAccountId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 100
+            pattern: '^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$'
+        - name: entityType
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 100
+            pattern: '^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$'
+        - name: entityId
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 128 }
+        - name: from
+          in: query
+          required: false
+          description: Batas occurredAt paling awal, inklusif; timestamp ISO wajib menyertakan zona waktu.
+          schema: { $ref: '#/components/schemas/DateTime' }
+        - name: to
+          in: query
+          required: false
+          description: Batas occurredAt paling akhir, inklusif; timestamp ISO wajib menyertakan zona waktu.
+          schema: { $ref: '#/components/schemas/DateTime' }
+        - $ref: '#/components/parameters/Page'
+        - name: pageSize
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: Halaman audit log; hanya field DTO yang diizinkan dikembalikan.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditLogPage' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/system-disruptions:
+    get:
+      tags: [System disruption]
+      operationId: listSystemDisruptions
+      summary: Daftar gangguan sistem
+      x-required-roles: [ADMIN]
+      parameters:
+        - name: storeId
+          in: query
+          required: false
+          description: Memfilter gangguan untuk store ini; tanpa filter, global dan semua store disertakan.
+          schema: { type: string, format: uuid }
+        - name: page
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 10000, default: 1 }
+        - name: pageSize
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 50, default: 25 }
+      responses:
+        '200':
+          description: Halaman gangguan, termasuk gangguan global saat storeId tidak difilter
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemDisruptionPage' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [System disruption]
+      operationId: createSystemDisruption
+      summary: Catat gangguan sistem
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SystemDisruptionCreateInput' }
+      responses:
+        '201':
+          description: Gangguan aktif tercatat dan audit event ditambahkan
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemDisruption' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/device-bindings/pending:
+    get:
+      tags: [Devices]
+      operationId: listPendingDeviceBindings
+      summary: Daftar perangkat menunggu persetujuan
+      x-required-roles: [ADMIN]
+      responses:
+        '200':
+          description: Daftar binding tanpa hash perangkat
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/DeviceBinding' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/device-bindings/{bindingId}/approve:
+    post:
+      tags: [Devices]
+      operationId: approveDeviceBinding
+      summary: Setujui binding perangkat
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      parameters:
+        - $ref: '#/components/parameters/BindingId'
+      responses:
+        '200':
+          description: Binding terbaru
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DeviceBinding' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/device-bindings/{bindingId}/revoke:
+    post:
+      tags: [Devices]
+      operationId: revokeDeviceBinding
+      summary: Cabut binding perangkat
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      parameters:
+        - $ref: '#/components/parameters/BindingId'
+      responses:
+        '200':
+          description: Binding terbaru
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DeviceBinding' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/shifts:
+    get:
+      tags: [Schedule]
+      operationId: listShifts
+      summary: Daftar master shift
+      x-required-roles: [ADMIN]
+      responses:
+        '200':
+          description: Daftar shift
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/WorkShift' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Schedule]
+      operationId: createShift
+      summary: Buat master shift
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkShiftCreateInput' }
+      responses:
+        '201':
+          description: Shift dibuat
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkShift' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/shifts/{shiftId}:
+    parameters:
+      - $ref: '#/components/parameters/ShiftId'
+    get:
+      tags: [Schedule]
+      operationId: getShift
+      summary: Detail shift
+      x-required-roles: [ADMIN]
+      responses:
+        '200':
+          description: DTO shift
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkShift' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Schedule]
+      operationId: updateShift
+      summary: Ubah master shift
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkShiftUpdateInput' }
+      responses:
+        '200':
+          description: Shift terbaru
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkShift' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/shifts/{shiftId}/deactivate:
+    post:
+      tags: [Schedule]
+      operationId: deactivateShift
+      summary: Nonaktifkan shift
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      parameters:
+        - $ref: '#/components/parameters/ShiftId'
+      responses:
+        '200':
+          description: Shift nonaktif
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkShift' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/shift-assignments:
+    get:
+      tags: [Schedule]
+      operationId: listShiftAssignments
+      summary: Daftar assignment shift
+      x-required-roles: [ADMIN]
+      parameters:
+        - name: employeeId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: storeId
+          in: query
+          required: false
+          description: UUID toko atau `global` untuk assignment tanpa toko.
+          schema: { type: string }
+        - name: businessDate
+          in: query
+          required: false
+          schema: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
+      responses:
+        '200':
+          description: Daftar assignment
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ShiftAssignment' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Schedule]
+      operationId: createShiftAssignment
+      summary: Tetapkan shift ke karyawan
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ShiftAssignmentCreateInput' }
+      responses:
+        '201':
+          description: Assignment dibuat
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShiftAssignment' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/shift-assignments/{assignmentId}:
+    parameters:
+      - $ref: '#/components/parameters/AssignmentId'
+    get:
+      tags: [Schedule]
+      operationId: getShiftAssignment
+      summary: Detail assignment shift
+      x-required-roles: [ADMIN]
+      responses:
+        '200':
+          description: DTO assignment shift
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShiftAssignment' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Schedule]
+      operationId: updateShiftAssignment
+      summary: Ubah assignment shift
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ShiftAssignmentUpdateInput' }
+      responses:
+        '200':
+          description: Assignment terbaru
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShiftAssignment' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/shift-assignments/{assignmentId}/deactivate:
+    post:
+      tags: [Schedule]
+      operationId: deactivateShiftAssignment
+      summary: Akhiri assignment shift pada tanggal tertentu
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      parameters:
+        - $ref: '#/components/parameters/AssignmentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [effectiveTo]
+              properties:
+                effectiveTo: { $ref: '#/components/schemas/Date' }
+      responses:
+        '200':
+          description: Assignment berakhir
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShiftAssignment' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/holidays:
+    get:
+      tags: [Schedule]
+      operationId: listHolidays
+      summary: Daftar hari libur
+      x-required-roles: [ADMIN]
+      parameters:
+        - name: from
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/Date' }
+        - name: to
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/Date' }
+        - name: storeId
+          in: query
+          required: false
+          description: UUID toko atau `national` untuk hari libur nasional.
+          schema: { type: string }
+      responses:
+        '200':
+          description: Daftar hari libur
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Holiday' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Schedule]
+      operationId: createHoliday
+      summary: Buat hari libur
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HolidayCreateInput' }
+      responses:
+        '201':
+          description: Hari libur dibuat
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Holiday' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/holidays/{holidayId}:
+    parameters:
+      - $ref: '#/components/parameters/HolidayId'
+    get:
+      tags: [Schedule]
+      operationId: getHoliday
+      summary: Detail hari libur
+      x-required-roles: [ADMIN]
+      responses:
+        '200':
+          description: DTO hari libur
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Holiday' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Schedule]
+      operationId: updateHoliday
+      summary: Ubah hari libur
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HolidayUpdateInput' }
+      responses:
+        '200':
+          description: Hari libur terbaru
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Holiday' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Schedule]
+      operationId: deleteHoliday
+      summary: Hapus hari libur
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      responses:
+        '204': { description: Hari libur dihapus }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/supervisor-store-assignments:
+    get:
+      tags: [Schedule]
+      operationId: listSupervisorStoreAssignments
+      summary: Daftar assignment Supervisor ke toko
+      x-required-roles: [ADMIN]
+      parameters:
+        - name: supervisorUserAccountId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: storeId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Daftar assignment
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SupervisorStoreAssignment' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Schedule]
+      operationId: createSupervisorStoreAssignment
+      summary: Tetapkan Supervisor ke toko
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SupervisorStoreAssignmentInput' }
+      responses:
+        '201':
+          description: Assignment dibuat
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SupervisorStoreAssignment' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/supervisor-store-assignments/{supervisorUserAccountId}/{storeId}:
+    delete:
+      tags: [Schedule]
+      operationId: deleteSupervisorStoreAssignment
+      summary: Hapus assignment Supervisor ke toko
+      x-required-roles: [ADMIN]
+      x-requires-same-origin: true
+      parameters:
+        - name: supervisorUserAccountId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/StoreId'
+      responses:
+        '204': { description: Assignment dihapus }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /attendance/attempts:
+    post:
+      tags: [Attendance]
+      operationId: createAttendanceAttempt
+      summary: Kirim percobaan check-in atau check-out
+      description: >-
+        `idempotencyKey` wajib berupa UUID. Waktu dan pilihan lokasi dari client tidak
+        dipercaya; server menentukan waktu, shift, store, dan hasil validasi. Respons
+        `202` berarti diterima untuk diproses; replay idempoten dapat merespons `200`.
+      x-required-roles: [EMPLOYEE]
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AttendanceAttemptInput' }
+      responses:
+        '202':
+          description: Percobaan diterima
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AttendanceAttemptReceipt' }
+        '200':
+          description: Hasil replay idempoten
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AttendanceAttemptReceipt' }
+        default: { $ref: '#/components/responses/Problem' }
+  /attendance/selfie-upload-intents:
+    post:
+      tags: [Attendance]
+      operationId: createSelfieUploadIntent
+      summary: Minta URL upload selfie privat
+      description: URL upload sementara dan header wajib adalah kredensial bearer; jangan log atau simpan di URL aplikasi.
+      x-required-roles: [EMPLOYEE]
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SelfieUploadIntentInput' }
+      responses:
+        '201':
+          description: Intent upload sementara
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SelfieUploadIntent' }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/attendance-attempts/{attemptId}/selfie-url:
+    get:
+      tags: [Attendance]
+      operationId: getAdminAttendanceSelfieUrl
+      summary: Buat URL baca sementara untuk bukti selfie
+      description: URL bertanda tangan hanya diterbitkan setelah pemeriksaan hak akses; masa berlaku dibatasi retensi.
+      x-required-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/AttemptId'
+      responses:
+        '200':
+          description: URL baca sementara
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SignedUrl' }
+        default: { $ref: '#/components/responses/Problem' }
+  /attendance/verifications:
+    get:
+      tags: [Attendance]
+      operationId: listAttendanceVerifications
+      summary: Daftar antrean verifikasi absensi
+      x-required-roles: [ADMIN, SUPERVISOR]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - name: pageSize
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 50, default: 25 }
+        - name: storeId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Halaman antrean; scope Supervisor dibatasi assignment toko
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VerificationQueuePage' }
+        default: { $ref: '#/components/responses/Problem' }
+  /attendance/verifications/{attendanceId}:
+    get:
+      tags: [Attendance]
+      operationId: getAttendanceVerification
+      summary: Detail absensi untuk pemeriksaan
+      x-required-roles: [ADMIN, SUPERVISOR]
+      parameters:
+        - $ref: '#/components/parameters/AttendanceId'
+      responses:
+        '200':
+          description: Detail absensi
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VerificationDetail' }
+        default: { $ref: '#/components/responses/Problem' }
+  /attendance/verifications/{attendanceId}/selfie-url:
+    get:
+      tags: [Attendance]
+      operationId: getAttendanceVerificationSelfieUrl
+      summary: Buat URL baca sementara selfie verifikasi
+      x-required-roles: [ADMIN, SUPERVISOR]
+      parameters:
+        - $ref: '#/components/parameters/AttendanceId'
+      responses:
+        '200':
+          description: URL baca sementara
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SignedUrl' }
+        default: { $ref: '#/components/responses/Problem' }
+  /attendance/verifications/{attendanceId}/decision:
+    post:
+      tags: [Attendance]
+      operationId: decideAttendanceVerification
+      summary: Setujui atau tolak hasil absensi
+      x-required-roles: [ADMIN, SUPERVISOR]
+      x-requires-same-origin: true
+      parameters:
+        - $ref: '#/components/parameters/AttendanceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VerificationDecisionInput' }
+      responses:
+        '200':
+          description: Keputusan tersimpan
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VerificationDecisionReceipt' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /attendance/requests:
+    get:
+      tags: [Requests]
+      operationId: listAttendanceRequests
+      summary: Daftar pengajuan dalam cakupan akun
+      x-required-roles: [ADMIN, SUPERVISOR, EMPLOYEE]
+      parameters:
+        - name: requestType
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/EmployeeRequestType' }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/RequestStatus' }
+        - $ref: '#/components/parameters/Page'
+        - name: pageSize
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 50, default: 25 }
+      responses:
+        '200':
+          description: Halaman pengajuan; data dibatasi berdasarkan owner/reviewer scope
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AttendanceRequestPage' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Requests]
+      operationId: createAttendanceRequest
+      summary: Ajukan izin, sakit, cuti tahunan, atau lembur
+      description: CORRECTION tidak didukung endpoint ini. ID karyawan selalu dari sesi. Surat sakit opsional pada bentuk request, tetapi aturan bisnis mewajibkannya untuk SICK.
+      x-required-roles: [EMPLOYEE]
+      x-requires-same-origin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AttendanceRequestCreateInput' }
+      responses:
+        '201':
+          description: Pengajuan dibuat
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AttendanceRequest' }
+        default: { $ref: '#/components/responses/Problem' }
+  /attendance/requests/{requestId}:
+    get:
+      tags: [Requests]
+      operationId: getAttendanceRequest
+      summary: Detail pengajuan sesuai scope akun
+      x-required-roles: [ADMIN, SUPERVISOR, EMPLOYEE]
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Detail pengajuan; object key privat tidak dikembalikan
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AttendanceRequest' }
+        default: { $ref: '#/components/responses/Problem' }
+  /attendance/requests/{requestId}/attachment-url:
+    get:
+      tags: [Requests]
+      operationId: getAttendanceRequestAttachmentUrl
+      summary: Buat URL unduh sementara lampiran
+      description: URL baca sementara diterbitkan hanya sesudah authorization server-side.
+      x-required-roles: [ADMIN, SUPERVISOR, EMPLOYEE]
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: URL unduh sementara
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SignedUrl' }
+        default: { $ref: '#/components/responses/Problem' }
+  /attendance/requests/{requestId}/decision:
+    post:
+      tags: [Requests]
+      operationId: decideAttendanceRequest
+      summary: Setujui atau tolak pengajuan
+      description: Supervisor hanya dapat memutus pengajuan yang lolos scope toko/jadwal; keputusan overtime memerlukan Admin.
+      x-required-roles: [ADMIN, SUPERVISOR]
+      x-requires-same-origin: true
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RequestDecisionInput' }
+      responses:
+        '200':
+          description: Pengajuan setelah keputusan
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AttendanceRequest' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /dashboard:
+    get:
+      tags: [Dashboard]
+      operationId: getAdminDashboard
+      summary: Ringkasan absensi Admin atau Supervisor
+      x-required-roles: [ADMIN, SUPERVISOR]
+      parameters:
+        - name: date
+          in: query
+          required: false
+          description: Tanggal bisnis; default ditentukan server dalam TIMEZONE.
+          schema: { $ref: '#/components/schemas/Date' }
+        - name: storeId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: shiftId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/Page'
+        - name: pageSize
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 50, default: 25 }
+      responses:
+        '200':
+          description: Summary, daftar belum check-in, trend 30 hari, dan ranking keterlambatan
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminDashboard' }
+        default: { $ref: '#/components/responses/Problem' }
+  /me/dashboard:
+    get:
+      tags: [Dashboard]
+      operationId: getEmployeeDashboard
+      summary: Status shift dan riwayat karyawan sendiri
+      x-required-roles: [EMPLOYEE]
+      parameters:
+        - name: historyPage
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 10000, default: 1 }
+        - name: historyPageSize
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+        - name: historyFrom
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/Date' }
+        - name: historyTo
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/Date' }
+        - name: requestPage
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 10000, default: 1 }
+        - name: requestPageSize
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      responses:
+        '200':
+          description: Status hari ini, riwayat absensi dan status pengajuan sendiri
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmployeeDashboard' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /reports/monthly:
+    get:
+      tags: [Reports]
+      operationId: getMonthlyAttendanceReport
+      summary: Rekap bulanan absensi Admin atau Supervisor
+      description: >-
+        Satu bulan kalender per permintaan. Supervisor hanya melihat toko pada assignment session;
+        filter toko/karyawan tidak dapat memperluas scope. Status koreksi belum diterapkan sampai
+        workflow koreksi tersedia. workDays menghitung tanggal kerja unik per karyawan yang
+        memiliki shift terjadwal non-holiday yang telah tiba/berjalan; beberapa shift pada
+        tanggal yang sama dihitung satu hari, sesuai konfirmasi pemilik produk. Detail tetap
+        disajikan per shift-hari.
+      x-required-roles: [ADMIN, SUPERVISOR]
+      parameters:
+        - name: month
+          in: query
+          required: true
+          schema: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-2])$', examples: ['2026-10'] }
+        - name: storeId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: employeeId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Ringkasan per karyawan dan detail per shift-hari
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MonthlyReport' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /reports/monthly/export:
+    get:
+      tags: [Reports]
+      operationId: exportMonthlyAttendanceReport
+      summary: Ekspor rekap bulanan menjadi workbook Excel
+      description: >-
+        Menghasilkan sheet Ringkasan dan Detail Harian dari aggregator yang sama dengan endpoint
+        JSON. Export dicatat pada audit log; tidak menyimpan isi workbook pada audit.
+      x-required-roles: [ADMIN, SUPERVISOR]
+      parameters:
+        - name: month
+          in: query
+          required: true
+          schema: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-2])$', examples: ['2026-10'] }
+        - name: storeId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: employeeId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: File XLSX yang dibatasi ke satu periode kalender
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+            Content-Disposition:
+              schema: { type: string, example: 'attachment; filename="rekap-absensi-2026-10.xlsx"' }
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema: { type: string, format: binary }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /notifications:
+    get:
+      tags: [Notifications]
+      operationId: listNotifications
+      summary: Daftar notifikasi milik akun sesi
+      x-required-roles: [ADMIN, SUPERVISOR, EMPLOYEE]
+      parameters:
+        - name: read
+          in: query
+          required: false
+          schema: { type: string, enum: [ALL, READ, UNREAD], default: ALL }
+        - $ref: '#/components/parameters/Page'
+        - name: pageSize
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 50, default: 25 }
+      responses:
+        '200':
+          description: Halaman notifikasi dan total belum dibaca
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationPage' }
+        default: { $ref: '#/components/responses/Problem' }
+  /notifications/{notificationId}/read:
+    patch:
+      tags: [Notifications]
+      operationId: markNotificationRead
+      summary: Tandai notifikasi milik akun sesi sebagai dibaca
+      x-required-roles: [ADMIN, SUPERVISOR, EMPLOYEE]
+      x-requires-same-origin: true
+      parameters:
+        - $ref: '#/components/parameters/NotificationId'
+      responses:
+        '200':
+          description: ID dan waktu baca notifikasi
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [id, readAt]
+                properties:
+                  id: { type: string, format: uuid }
+                  readAt: { $ref: '#/components/schemas/DateTime' }
+        default: { $ref: '#/components/responses/Problem' }
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: absen_session
+      description: Sesi server-side dalam cookie signed, HttpOnly, SameSite=Strict.
+  parameters:
+    Page:
+      name: page
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, maximum: 10000, default: 1 }
+    AccountId:
+      name: accountId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    EmployeeId:
+      name: employeeId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    StoreId:
+      name: storeId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    BindingId:
+      name: bindingId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ShiftId:
+      name: shiftId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    AssignmentId:
+      name: assignmentId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    HolidayId:
+      name: holidayId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    AttemptId:
+      name: attemptId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    AttendanceId:
+      name: attendanceId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RequestId:
+      name: requestId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    NotificationId:
+      name: notificationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    Problem:
+      description: Error response dalam format application/problem+json
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetails' }
+  schemas:
+    Date:
+      type: string
+      pattern: '^\d{4}-\d{2}-\d{2}$'
+      examples: ['2026-10-11']
+    DateTime:
+      type: string
+      format: date-time
+    ClockTime:
+      type: string
+      pattern: '^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$'
+    ProblemDetails:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, detail, instance, code, requestId]
+      properties:
+        type: { type: string, const: about:blank }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        code: { type: string }
+        requestId: { type: string }
+      description: Kode umum mencakup INVALID_INPUT, UNAUTHENTICATED, FORBIDDEN, NOT_FOUND, RATE_LIMITED, dan INTERNAL_SERVER_ERROR; setiap service dapat menambahkan kode domain.
+    LoginInput:
+      type: object
+      additionalProperties: false
+      required: [identifier, password]
+      properties:
+        identifier: { type: string }
+        password: { type: string, format: password }
+        deviceToken: { type: string, description: Token perangkat; tidak dikembalikan ke client. }
+        deviceName: { type: string }
+    ChangePasswordInput:
+      type: object
+      additionalProperties: false
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: { type: string, format: password }
+        newPassword: { type: string, format: password }
+    ResetPasswordInput:
+      type: object
+      additionalProperties: false
+      required: [temporaryPassword]
+      properties:
+        temporaryPassword: { type: string, format: password }
+    PublicUser:
+      type: object
+      additionalProperties: false
+      required:
+        [id, username, role, employeeId, deviceBindingStatus, mustChangePassword, consentRequired]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        role: { type: string, enum: [ADMIN, SUPERVISOR, EMPLOYEE] }
+        employeeId: { type: [string, 'null'], format: uuid }
+        deviceBindingStatus:
+          oneOf:
+            - { type: string, enum: [PENDING, APPROVED, REVOKED] }
+            - { type: 'null' }
+        mustChangePassword: { type: boolean }
+        consentRequired: { type: boolean }
+    AuthSessionResponse:
+      type: object
+      additionalProperties: false
+      required: [user, consentRequired]
+      properties:
+        user: { $ref: '#/components/schemas/PublicUser' }
+        consentRequired: { type: boolean }
+    ConsentPurpose:
+      type: object
+      additionalProperties: false
+      required: [id, label]
+      properties:
+        id: { type: string }
+        label: { type: string }
+    ConsentPolicy:
+      type: object
+      additionalProperties: false
+      required: [version, text, purposes]
+      properties:
+        version: { type: string }
+        text: { type: string }
+        purposes:
+          type: array
+          items: { $ref: '#/components/schemas/ConsentPurpose' }
+    ConsentCurrentResponse:
+      type: object
+      additionalProperties: false
+      required: [policy, consentRequired]
+      properties:
+        policy: { $ref: '#/components/schemas/ConsentPolicy' }
+        consentRequired: { type: boolean }
+    ConsentAcceptInput:
+      type: object
+      additionalProperties: false
+      required: [policyVersion, accepted]
+      properties:
+        policyVersion: { type: string, minLength: 1, maxLength: 100 }
+        accepted: { type: boolean, const: true }
+    ConsentAcceptResponse:
+      type: object
+      additionalProperties: false
+      required: [policyVersion, acceptedAt, alreadyAccepted]
+      properties:
+        policyVersion: { type: string }
+        acceptedAt: { $ref: '#/components/schemas/DateTime' }
+        alreadyAccepted: { type: boolean }
+    ConsentHistoryItem:
+      type: object
+      additionalProperties: false
+      required: [id, policyVersion, purposes, acceptedAt, withdrawnAt]
+      properties:
+        id: { type: string, format: uuid }
+        policyVersion: { type: string }
+        purposes: { type: array, items: { $ref: '#/components/schemas/ConsentPurpose' } }
+        acceptedAt: { $ref: '#/components/schemas/DateTime' }
+        withdrawnAt: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
+    ConsentHistoryPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, pageSize, hasNextPage]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ConsentHistoryItem' } }
+        page: { type: integer }
+        pageSize: { type: integer }
+        hasNextPage: { type: boolean }
+    Account:
+      type: object
+      additionalProperties: false
+      required: [id, username, role, status, employeeId, mustChangePassword, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        role: { type: string, enum: [ADMIN, SUPERVISOR, EMPLOYEE] }
+        status: { type: string, enum: [ACTIVE, INACTIVE, SUSPENDED] }
+        employeeId: { type: [string, 'null'], format: uuid }
+        mustChangePassword: { type: boolean }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+        updatedAt: { $ref: '#/components/schemas/DateTime' }
+    AccountCreateInput:
+      type: object
+      additionalProperties: false
+      required: [username, role]
+      properties:
+        username: { type: string, minLength: 1, maxLength: 256 }
+        role: { type: string, enum: [ADMIN, SUPERVISOR, EMPLOYEE] }
+        status: { type: string, enum: [ACTIVE, INACTIVE, SUSPENDED] }
+        employeeId: { type: [string, 'null'], format: uuid }
+    AccountUpdateInput:
+      type: object
+      additionalProperties: false
+      properties:
+        username: { type: string, minLength: 1, maxLength: 256 }
+        role: { type: string, enum: [ADMIN, SUPERVISOR, EMPLOYEE] }
+        status: { type: string, enum: [ACTIVE, INACTIVE, SUSPENDED] }
+        employeeId: { type: [string, 'null'], format: uuid }
+    Employee:
+      type: object
+      additionalProperties: false
+      required: [id, nik, fullName, position, status, employmentDate, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        nik: { type: string }
+        fullName: { type: string }
+        position: { type: [string, 'null'] }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        employmentDate: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+        updatedAt: { $ref: '#/components/schemas/DateTime' }
+    EmployeeCreateInput:
+      type: object
+      additionalProperties: false
+      required: [nik, fullName]
+      properties:
+        nik: { type: string, minLength: 1, maxLength: 64 }
+        fullName: { type: string, minLength: 1, maxLength: 150 }
+        position: { type: [string, 'null'], maxLength: 100 }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        employmentDate: { oneOf: [{ $ref: '#/components/schemas/Date' }, { type: 'null' }] }
+    EmployeeUpdateInput:
+      type: object
+      additionalProperties: false
+      properties:
+        nik: { type: string, minLength: 1, maxLength: 64 }
+        fullName: { type: string, minLength: 1, maxLength: 150 }
+        position: { type: [string, 'null'], maxLength: 100 }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        employmentDate: { oneOf: [{ $ref: '#/components/schemas/Date' }, { type: 'null' }] }
+    Store:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          name,
+          address,
+          latitude,
+          longitude,
+          radiusMeters,
+          accuracyLimitMeters,
+          wifiPublicIp,
+          isActive,
+          createdAt,
+          updatedAt,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        address: { type: [string, 'null'] }
+        latitude: { type: number, minimum: -90, maximum: 90 }
+        longitude: { type: number, minimum: -180, maximum: 180 }
+        radiusMeters: { type: integer, minimum: 1, maximum: 2147483647 }
+        accuracyLimitMeters: { type: integer, minimum: 1, maximum: 2147483647 }
+        wifiPublicIp: { type: [string, 'null'] }
+        isActive: { type: boolean }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+        updatedAt: { $ref: '#/components/schemas/DateTime' }
+    StoreCreateInput:
+      type: object
+      additionalProperties: false
+      required: [name, latitude, longitude]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 160 }
+        address: { type: [string, 'null'], maxLength: 500 }
+        latitude: { type: number, minimum: -90, maximum: 90 }
+        longitude: { type: number, minimum: -180, maximum: 180 }
+        radiusMeters: { type: integer, minimum: 1, maximum: 2147483647 }
+        accuracyLimitMeters: { type: integer, minimum: 1, maximum: 2147483647 }
+        wifiPublicIp: { type: [string, 'null'], maxLength: 45 }
+        isActive: { type: boolean }
+    StoreUpdateInput:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 160 }
+        address: { type: [string, 'null'], maxLength: 500 }
+        latitude: { type: number, minimum: -90, maximum: 90 }
+        longitude: { type: number, minimum: -180, maximum: 180 }
+        radiusMeters: { type: integer, minimum: 1, maximum: 2147483647 }
+        accuracyLimitMeters: { type: integer, minimum: 1, maximum: 2147483647 }
+        wifiPublicIp: { type: [string, 'null'], maxLength: 45 }
+        isActive: { type: boolean }
+    AuditLog:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          actorUserAccountId,
+          occurredAt,
+          clientIp,
+          deviceIdHash,
+          action,
+          entityType,
+          entityId,
+          beforeData,
+          afterData,
+          reason,
+          requestId,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        actorUserAccountId: { type: [string, 'null'], format: uuid }
+        occurredAt: { $ref: '#/components/schemas/DateTime' }
+        clientIp: { type: [string, 'null'] }
+        deviceIdHash: { type: [string, 'null'] }
+        action: { type: string }
+        entityType: { type: string }
+        entityId: { type: [string, 'null'] }
+        beforeData:
+          oneOf:
+            - { type: object, additionalProperties: true }
+            - { type: 'null' }
+        afterData:
+          oneOf:
+            - { type: object, additionalProperties: true }
+            - { type: 'null' }
+        reason: { type: [string, 'null'] }
+        requestId: { type: [string, 'null'], format: uuid }
+    AuditLogPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, pageSize, hasNextPage]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/AuditLog' } }
+        page: { type: integer, minimum: 1, maximum: 10000 }
+        pageSize: { type: integer, minimum: 1, maximum: 100 }
+        hasNextPage: { type: boolean }
+    SystemDisruption:
+      type: object
+      additionalProperties: false
+      required: [id, storeId, startsAt, endsAt, reason, isActive, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        storeId: { type: [string, 'null'], format: uuid, description: null berarti global }
+        startsAt: { $ref: '#/components/schemas/DateTime' }
+        endsAt: { $ref: '#/components/schemas/DateTime' }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+        isActive: { type: boolean }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+        updatedAt: { $ref: '#/components/schemas/DateTime' }
+    SystemDisruptionCreateInput:
+      type: object
+      additionalProperties: false
+      required: [startsAt, endsAt, reason]
+      properties:
+        storeId: { type: [string, 'null'], format: uuid, description: null berarti global }
+        startsAt: { $ref: '#/components/schemas/DateTime' }
+        endsAt: { $ref: '#/components/schemas/DateTime' }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+      description: endsAt harus lebih besar daripada startsAt; timestamp wajib menyertakan zona waktu.
+    SystemDisruptionPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, pageSize, hasNextPage]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/SystemDisruption' }
+        page: { type: integer, minimum: 1 }
+        pageSize: { type: integer, minimum: 1, maximum: 50 }
+        hasNextPage: { type: boolean }
+    StoreEmployeeAssignment:
+      type: object
+      additionalProperties: false
+      required: [storeId, employeeId, assignedByUserAccountId, assignedAt, employee]
+      properties:
+        storeId: { type: string, format: uuid }
+        employeeId: { type: string, format: uuid }
+        assignedByUserAccountId: { type: [string, 'null'], format: uuid }
+        assignedAt: { $ref: '#/components/schemas/DateTime' }
+        employee:
+          type: object
+          additionalProperties: false
+          required: [id, nik, fullName, status]
+          properties:
+            id: { type: string, format: uuid }
+            nik: { type: string }
+            fullName: { type: string }
+            status: { type: string, enum: [ACTIVE, INACTIVE] }
+    DeviceBinding:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          employeeId,
+          deviceName,
+          status,
+          requestedAt,
+          approvedAt,
+          revokedAt,
+          createdAt,
+          updatedAt,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        employeeId: { type: string, format: uuid }
+        deviceName: { type: string }
+        status: { type: string, enum: [PENDING, APPROVED, REVOKED] }
+        requestedAt: { $ref: '#/components/schemas/DateTime' }
+        approvedAt: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
+        revokedAt: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+        updatedAt: { $ref: '#/components/schemas/DateTime' }
+    WorkShift:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          name,
+          startTime,
+          endTime,
+          breakMinutes,
+          lateToleranceMinutes,
+          workDays,
+          isActive,
+          createdAt,
+          updatedAt,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        startTime: { $ref: '#/components/schemas/ClockTime' }
+        endTime: { $ref: '#/components/schemas/ClockTime' }
+        breakMinutes: { type: integer, minimum: 0 }
+        lateToleranceMinutes: { type: integer, minimum: 0 }
+        workDays:
+          {
+            type: array,
+            minItems: 1,
+            uniqueItems: true,
+            items: { type: integer, minimum: 1, maximum: 7 },
+          }
+        isActive: { type: boolean }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+        updatedAt: { $ref: '#/components/schemas/DateTime' }
+    WorkShiftCreateInput:
+      type: object
+      additionalProperties: false
+      required: [name, startTime, endTime, workDays]
+      properties:
+        name: { type: string }
+        startTime: { $ref: '#/components/schemas/ClockTime' }
+        endTime: { $ref: '#/components/schemas/ClockTime' }
+        breakMinutes: { type: integer, minimum: 0 }
+        lateToleranceMinutes: { type: integer, minimum: 0 }
+        workDays:
+          {
+            type: array,
+            minItems: 1,
+            uniqueItems: true,
+            items: { type: integer, minimum: 1, maximum: 7 },
+          }
+        isActive: { type: boolean }
+    WorkShiftUpdateInput:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        startTime: { $ref: '#/components/schemas/ClockTime' }
+        endTime: { $ref: '#/components/schemas/ClockTime' }
+        breakMinutes: { type: integer, minimum: 0 }
+        lateToleranceMinutes: { type: integer, minimum: 0 }
+        workDays:
+          {
+            type: array,
+            minItems: 1,
+            uniqueItems: true,
+            items: { type: integer, minimum: 1, maximum: 7 },
+          }
+        isActive: { type: boolean }
+    ShiftAssignment:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          employeeId,
+          workShiftId,
+          storeId,
+          assignedByUserAccountId,
+          effectiveFrom,
+          effectiveTo,
+          createdAt,
+          employee,
+          workShift,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        employeeId: { type: string, format: uuid }
+        workShiftId: { type: string, format: uuid }
+        storeId: { type: [string, 'null'], format: uuid }
+        assignedByUserAccountId: { type: [string, 'null'], format: uuid }
+        effectiveFrom: { $ref: '#/components/schemas/Date' }
+        effectiveTo: { oneOf: [{ $ref: '#/components/schemas/Date' }, { type: 'null' }] }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+        employee:
+          type: object
+          additionalProperties: false
+          required: [id, nik, fullName, status]
+          properties:
+            id: { type: string, format: uuid }
+            nik: { type: string }
+            fullName: { type: string }
+            status: { type: string, enum: [ACTIVE, INACTIVE] }
+        workShift: { $ref: '#/components/schemas/WorkShift' }
+    ShiftAssignmentCreateInput:
+      type: object
+      additionalProperties: false
+      required: [employeeId, workShiftId, effectiveFrom]
+      properties:
+        employeeId: { type: string, format: uuid }
+        workShiftId: { type: string, format: uuid }
+        storeId: { type: [string, 'null'], format: uuid }
+        effectiveFrom: { $ref: '#/components/schemas/Date' }
+        effectiveTo: { oneOf: [{ $ref: '#/components/schemas/Date' }, { type: 'null' }] }
+    ShiftAssignmentUpdateInput:
+      type: object
+      additionalProperties: false
+      properties:
+        workShiftId: { type: string, format: uuid }
+        storeId: { type: [string, 'null'], format: uuid }
+        effectiveFrom: { $ref: '#/components/schemas/Date' }
+        effectiveTo: { oneOf: [{ $ref: '#/components/schemas/Date' }, { type: 'null' }] }
+    Holiday:
+      type: object
+      additionalProperties: false
+      required: [id, storeId, holidayDate, description, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        storeId: { type: [string, 'null'], format: uuid }
+        holidayDate: { $ref: '#/components/schemas/Date' }
+        description: { type: string }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+    HolidayCreateInput:
+      type: object
+      additionalProperties: false
+      required: [holidayDate, description]
+      properties:
+        storeId: { type: [string, 'null'], format: uuid }
+        holidayDate: { $ref: '#/components/schemas/Date' }
+        description: { type: string }
+    HolidayUpdateInput:
+      type: object
+      additionalProperties: false
+      properties:
+        storeId: { type: [string, 'null'], format: uuid }
+        holidayDate: { $ref: '#/components/schemas/Date' }
+        description: { type: string }
+    SupervisorStoreAssignment:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          supervisorUserAccountId,
+          supervisorUsername,
+          storeId,
+          storeName,
+          assignedByUserAccountId,
+          assignedAt,
+        ]
+      properties:
+        supervisorUserAccountId: { type: string, format: uuid }
+        supervisorUsername: { type: string }
+        storeId: { type: string, format: uuid }
+        storeName: { type: string }
+        assignedByUserAccountId: { type: [string, 'null'], format: uuid }
+        assignedAt: { $ref: '#/components/schemas/DateTime' }
+    SupervisorStoreAssignmentInput:
+      type: object
+      additionalProperties: false
+      required: [supervisorUserAccountId, storeId]
+      properties:
+        supervisorUserAccountId: { type: string, format: uuid }
+        storeId: { type: string, format: uuid }
+    AttendanceAttemptInput:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          idempotencyKey,
+          type,
+          clientRecordedAt,
+          networkStatus,
+          location,
+          validationMethod,
+          selfie,
+          liveness,
+        ]
+      properties:
+        idempotencyKey: { type: string, format: uuid }
+        storeId: { type: string, format: uuid }
+        type: { type: string, enum: [CHECK_IN, CHECK_OUT] }
+        clientRecordedAt:
+          { type: string, format: date-time, description: ISO-8601 timestamp with timezone offset. }
+        networkStatus: { type: string, enum: [ONLINE, OFFLINE] }
+        location:
+          type: object
+          additionalProperties: false
+          required: [latitude, longitude, accuracyMeters]
+          properties:
+            latitude: { type: number, minimum: -90, maximum: 90, multipleOf: 0.000001 }
+            longitude: { type: number, minimum: -180, maximum: 180, multipleOf: 0.000001 }
+            accuracyMeters:
+              { type: number, exclusiveMinimum: 0, maximum: 999999.99, multipleOf: 0.01 }
+        validationMethod: { type: string, enum: [GPS, QR, WIFI, SUPERVISOR, OFFLINE, ASSISTED] }
+        selfie:
+          type: object
+          additionalProperties: false
+          required: [blob, sizeKb]
+          properties:
+            blob: { type: string, format: uuid, description: Reference privat hasil upload intent. }
+            sizeKb: { type: integer, minimum: 1, maximum: 200 }
+        liveness:
+          type: object
+          additionalProperties: false
+          required: [faceDetected, passed]
+          properties:
+            faceDetected: { type: boolean }
+            passed: { type: boolean }
+        proofCode: { type: 'null' }
+    AttendanceAttemptReceipt:
+      type: object
+      additionalProperties: false
+      required: [attemptId, state, type, receivedAt, replayed]
+      properties:
+        attemptId: { type: string, format: uuid }
+        state: { type: string, enum: [RECEIVED, RECORDED] }
+        type: { type: string, enum: [CHECK_IN, CHECK_OUT] }
+        receivedAt: { $ref: '#/components/schemas/DateTime' }
+        replayed: { type: boolean }
+        attendanceId: { type: string, format: uuid }
+        validationStatus:
+          { type: string, enum: [VALID, PENDING_VERIFICATION, APPROVED, REJECTED, PENDING_OFFLINE] }
+    SelfieUploadIntentInput:
+      type: object
+      additionalProperties: false
+      required: [contentType, sizeBytes]
+      properties:
+        contentType: { type: string, enum: [image/jpeg, image/png, image/webp] }
+        sizeBytes: { type: integer, minimum: 1, maximum: 204800 }
+    SelfieUploadIntent:
+      type: object
+      additionalProperties: false
+      required: [referenceId, uploadUrl, requiredHeaders, expiresAt]
+      properties:
+        referenceId: { type: string, format: uuid }
+        uploadUrl: { type: string, format: uri }
+        requiredHeaders:
+          type: object
+          additionalProperties: { type: string }
+        expiresAt: { $ref: '#/components/schemas/DateTime' }
+    SignedUrl:
+      type: object
+      additionalProperties: false
+      required: [url, expiresAt]
+      properties:
+        url: { type: string, format: uri }
+        expiresAt: { $ref: '#/components/schemas/DateTime' }
+    VerificationDecisionInput:
+      type: object
+      additionalProperties: false
+      required: [decision]
+      properties:
+        decision: { type: string, enum: [APPROVED, REJECTED] }
+        reason:
+          {
+            type: string,
+            maxLength: 500,
+            description: Wajib diisi untuk REJECTED menurut aturan service.,
+          }
+    VerificationDecisionReceipt:
+      type: object
+      additionalProperties: false
+      required: [attendanceId, validationStatus, reviewedAt, serverTime, deviceTime]
+      properties:
+        attendanceId: { type: string, format: uuid }
+        validationStatus: { type: string, enum: [APPROVED, REJECTED] }
+        reviewedAt: { $ref: '#/components/schemas/DateTime' }
+        serverTime: { $ref: '#/components/schemas/DateTime' }
+        deviceTime: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
+    AttendanceLocation:
+      type: object
+      additionalProperties: false
+      required: [latitude, longitude, accuracyMeters, distanceMeters]
+      properties:
+        latitude: { type: number }
+        longitude: { type: number }
+        accuracyMeters: { type: number }
+        distanceMeters: { type: [number, 'null'] }
+    AttendanceHistoryItem:
+      type: object
+      additionalProperties: false
+      required:
+        [attendanceId, type, workDate, serverTime, deviceTime, validationStatus, reason, store]
+      properties:
+        attendanceId: { type: string, format: uuid }
+        type: { type: string }
+        workDate: { $ref: '#/components/schemas/Date' }
+        serverTime: { $ref: '#/components/schemas/DateTime' }
+        deviceTime: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
+        validationStatus: { type: string }
+        reason: { type: [string, 'null'] }
+        store: { oneOf: [{ $ref: '#/components/schemas/NamedEntity' }, { type: 'null' }] }
+    NamedEntity:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+    VerificationQueueItem:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          attendanceId,
+          employee,
+          store,
+          type,
+          workDate,
+          serverTime,
+          deviceTime,
+          dueAt,
+          overdue,
+          validationStatus,
+          method,
+          networkStatus,
+          device,
+          location,
+          selfie,
+          recentAttendance,
+        ]
+      properties:
+        attendanceId: { type: string, format: uuid }
+        employee:
+          type: object
+          additionalProperties: false
+          required: [id, fullName, position]
+          properties:
+            id: { type: string, format: uuid }
+            fullName: { type: string }
+            position: { type: [string, 'null'] }
+        store: { oneOf: [{ $ref: '#/components/schemas/NamedEntity' }, { type: 'null' }] }
+        type: { type: string }
+        workDate: { $ref: '#/components/schemas/Date' }
+        serverTime: { $ref: '#/components/schemas/DateTime' }
+        deviceTime: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
+        dueAt: { $ref: '#/components/schemas/DateTime' }
+        overdue: { type: boolean }
+        validationStatus:
+          { type: string, enum: [VALID, PENDING_VERIFICATION, APPROVED, REJECTED, PENDING_OFFLINE] }
+        method: { type: string, enum: [GPS, QR, WIFI, SUPERVISOR, OFFLINE, ASSISTED] }
+        networkStatus: { type: string, enum: [ONLINE, OFFLINE] }
+        device:
+          type: object
+          additionalProperties: false
+          required: [name]
+          properties:
+            name: { type: [string, 'null'] }
+        location: { oneOf: [{ $ref: '#/components/schemas/AttendanceLocation' }, { type: 'null' }] }
+        selfie: { oneOf: [{ $ref: '#/components/schemas/SignedUrl' }, { type: 'null' }] }
+        recentAttendance:
+          type: array
+          items: { $ref: '#/components/schemas/AttendanceHistoryItem' }
+    VerificationDetail:
+      $ref: '#/components/schemas/VerificationQueueItem'
+    VerificationQueuePage:
+      type: object
+      additionalProperties: false
+      required: [items, page, pageSize, hasNextPage]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/VerificationQueueItem' } }
+        page: { type: integer }
+        pageSize: { type: integer }
+        hasNextPage: { type: boolean }
+    EmployeeRequestType:
+      type: string
+      enum: [LEAVE, SICK, ANNUAL_LEAVE, OVERTIME]
+    RequestStatus:
+      type: string
+      enum: [PENDING, APPROVED, REJECTED, CANCELLED]
+    DoctorNote:
+      type: object
+      additionalProperties: false
+      required: [contentType, dataBase64]
+      properties:
+        contentType: { type: string, enum: [image/jpeg, image/png, image/webp] }
+        dataBase64:
+          {
+            type: string,
+            minLength: 1,
+            maxLength: 6990511,
+            description: Konten maksimal 5 MiB sebelum encoding Base64.,
+          }
+    AttendanceRequestCreateInput:
+      type: object
+      additionalProperties: false
+      required: [requestType, startDate, endDate, reason]
+      properties:
+        requestType: { $ref: '#/components/schemas/EmployeeRequestType' }
+        startDate: { type: string, maxLength: 10 }
+        endDate: { type: string, maxLength: 10 }
+        reason: { type: string, maxLength: 1000 }
+        requestedOvertimeMinutes: { type: integer, minimum: 1, maximum: 2147483647 }
+        doctorNote: { $ref: '#/components/schemas/DoctorNote' }
+    RequestDecisionInput:
+      type: object
+      additionalProperties: false
+      required: [decision, decisionNote]
+      properties:
+        decision: { type: string, enum: [APPROVED, REJECTED] }
+        decisionNote: { type: string, minLength: 1, maxLength: 500 }
+    AttendanceRequest:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          employee,
+          requestType,
+          startDate,
+          endDate,
+          reason,
+          status,
+          requestedAt,
+          decisionAt,
+          decisionNote,
+          hasAttachment,
+          requestedOvertimeMinutes,
+          approvedOvertimeMinutes,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        employee:
+          type: object
+          additionalProperties: false
+          required: [id, fullName]
+          properties:
+            id: { type: string, format: uuid }
+            fullName: { type: string }
+        requestType: { $ref: '#/components/schemas/EmployeeRequestType' }
+        startDate: { $ref: '#/components/schemas/Date' }
+        endDate: { $ref: '#/components/schemas/Date' }
+        reason: { type: string }
+        status: { $ref: '#/components/schemas/RequestStatus' }
+        requestedAt: { $ref: '#/components/schemas/DateTime' }
+        decisionAt: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
+        decisionNote: { type: [string, 'null'] }
+        hasAttachment: { type: boolean }
+        requestedOvertimeMinutes: { type: [integer, 'null'] }
+        approvedOvertimeMinutes: { type: integer }
+    AttendanceRequestPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, pageSize, hasNextPage]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/AttendanceRequest' } }
+        page: { type: integer }
+        pageSize: { type: integer }
+        hasNextPage: { type: boolean }
+    DashboardSummary:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          scheduledShifts,
+          present,
+          late,
+          notCheckedIn,
+          absent,
+          leave,
+          sick,
+          annualLeave,
+          waitingVerification,
+          pendingRequests,
+        ]
+      properties:
+        scheduledShifts: { type: integer }
+        present: { type: integer }
+        late: { type: integer }
+        notCheckedIn: { type: integer }
+        absent: { type: integer }
+        leave: { type: integer }
+        sick: { type: integer }
+        annualLeave: { type: integer }
+        waitingVerification: { type: integer }
+        pendingRequests: { type: integer }
+    DashboardShiftItem:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          employeeId,
+          employeeName,
+          shiftAssignmentId,
+          shiftId,
+          shiftName,
+          scheduledStartTime,
+          scheduledEndTime,
+          store,
+          date,
+          status,
+          checkInAt,
+          checkOutAt,
+          minutesAfterScheduledStart,
+        ]
+      properties:
+        employeeId: { type: string, format: uuid }
+        employeeName: { type: string }
+        shiftAssignmentId: { type: string, format: uuid }
+        shiftId: { type: string, format: uuid }
+        shiftName: { type: string }
+        scheduledStartTime: { $ref: '#/components/schemas/ClockTime' }
+        scheduledEndTime: { $ref: '#/components/schemas/ClockTime' }
+        store: { oneOf: [{ $ref: '#/components/schemas/NamedEntity' }, { type: 'null' }] }
+        date: { $ref: '#/components/schemas/Date' }
+        status:
+          {
+            type: string,
+            enum:
+              [
+                PRESENT,
+                LATE,
+                NOT_CHECKED_IN,
+                ABSENT,
+                LEAVE,
+                SICK,
+                ANNUAL_LEAVE,
+                WAITING_VERIFICATION,
+                REQUEST_PENDING,
+                HOLIDAY,
+                EARLY_LEAVE,
+                MISSING_CHECKOUT,
+                UNATTRIBUTED_ATTENDANCE,
+              ],
+          }
+        checkInAt: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
+        checkOutAt: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
+        minutesAfterScheduledStart:
+          {
+            type: [integer, 'null'],
+            description: Durasi sejak awal shift terjadwal; termasuk toleransi.,
+          }
+    DashboardShiftPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, pageSize, hasNextPage]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/DashboardShiftItem' } }
+        page: { type: integer }
+        pageSize: { type: integer }
+        hasNextPage: { type: boolean }
+    DashboardTrendItem:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          date,
+          scheduledShifts,
+          present,
+          late,
+          notCheckedIn,
+          absent,
+          leave,
+          sick,
+          annualLeave,
+          waitingVerification,
+          pendingRequests,
+        ]
+      properties:
+        date: { $ref: '#/components/schemas/Date' }
+        scheduledShifts: { type: integer }
+        present: { type: integer }
+        late: { type: integer }
+        notCheckedIn: { type: integer }
+        absent: { type: integer }
+        leave: { type: integer }
+        sick: { type: integer }
+        annualLeave: { type: integer }
+        waitingVerification: { type: integer }
+        pendingRequests: { type: integer }
+    LateRankingItem:
+      type: object
+      additionalProperties: false
+      required: [employeeId, employeeName, lateCount, lateDays, totalMinutesAfterScheduledStart]
+      properties:
+        employeeId: { type: string, format: uuid }
+        employeeName: { type: string }
+        lateCount: { type: integer }
+        lateDays: { type: integer }
+        totalMinutesAfterScheduledStart: { type: integer }
+    AdminDashboard:
+      type: object
+      additionalProperties: false
+      required: [summary, notCheckedIn, trend, lateRanking]
+      properties:
+        summary: { $ref: '#/components/schemas/DashboardSummary' }
+        notCheckedIn: { $ref: '#/components/schemas/DashboardShiftPage' }
+        trend: { type: array, items: { $ref: '#/components/schemas/DashboardTrendItem' } }
+        lateRanking: { type: array, items: { $ref: '#/components/schemas/LateRankingItem' } }
+    MonthlyReportStatus:
+      type: string
+      enum:
+        [
+          PRESENT,
+          LATE,
+          NOT_CHECKED_IN,
+          ABSENT,
+          LEAVE,
+          SICK,
+          ANNUAL_LEAVE,
+          WAITING_VERIFICATION,
+          REQUEST_PENDING,
+          HOLIDAY,
+          EARLY_LEAVE,
+          MISSING_CHECKOUT,
+          UNATTRIBUTED_ATTENDANCE,
+          NOT_STARTED,
+        ]
+    MonthlyReportValidationStatus:
+      type: string
+      enum: [VALID, APPROVED, PENDING_VERIFICATION, PENDING_OFFLINE, REJECTED]
+    MonthlyReportSummaryItem:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          employeeId,
+          employeeName,
+          workDays,
+          present,
+          lateCount,
+          lateMinutes,
+          absent,
+          leave,
+          sick,
+          annualLeave,
+          totalWorkMinutes,
+          approvedOvertimeMinutes,
+        ]
+      properties:
+        employeeId: { type: string, format: uuid }
+        employeeName: { type: string }
+        workDays:
+          {
+            type: integer,
+            minimum: 0,
+            description: Tanggal kerja unik dengan setidaknya satu shift terjadwal yang telah berlalu dan bukan hari libur; beberapa shift pada tanggal sama dihitung sekali.,
+          }
+        present:
+          {
+            type: integer,
+            minimum: 0,
+            description: Shift berstatus PRESENT; LATE dihitung terpisah.,
+          }
+        lateCount:
+          {
+            type: integer,
+            minimum: 0,
+            description: Check-in yang melewati toleransi,
+            termasuk shift tanpa checkout.,
+          }
+        lateMinutes:
+          {
+            type: integer,
+            minimum: 0,
+            description: Menit sejak mulai shift terjadwal,
+            termasuk toleransi,
+            dibulatkan ke menit terdekat.,
+          }
+        absent: { type: integer, minimum: 0 }
+        leave: { type: integer, minimum: 0 }
+        sick: { type: integer, minimum: 0 }
+        annualLeave: { type: integer, minimum: 0 }
+        totalWorkMinutes:
+          {
+            type: integer,
+            minimum: 0,
+            description: Pasangan check-in/out VALID atau APPROVED,
+            dibulatkan ke menit terdekat,
+            dikurangi istirahat shift.,
+          }
+        approvedOvertimeMinutes:
+          {
+            type: integer,
+            minimum: 0,
+            description: Hanya pengajuan lembur APPROVED yang disetujui Admin; report terscope toko memerlukan derivasi toko tunggal.,
+          }
+    MonthlyReportDailyDetail:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          employeeId,
+          employeeName,
+          date,
+          store,
+          shift,
+          checkInAt,
+          checkOutAt,
+          durationMinutes,
+          lateMinutesAfterScheduledStart,
+          status,
+          checkInValidationStatus,
+          checkOutValidationStatus,
+          validationStatus,
+        ]
+      properties:
+        employeeId: { type: string, format: uuid }
+        employeeName: { type: string }
+        date: { $ref: '#/components/schemas/Date' }
+        store: { oneOf: [{ $ref: '#/components/schemas/NamedEntity' }, { type: 'null' }] }
+        shift:
+          type: object
+          additionalProperties: false
+          required: [assignmentId, id, name]
+          properties:
+            assignmentId: { type: string, format: uuid }
+            id: { type: string, format: uuid }
+            name: { type: string }
+        checkInAt: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
+        checkOutAt: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
+        durationMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
+        lateMinutesAfterScheduledStart: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
+        status: { $ref: '#/components/schemas/MonthlyReportStatus' }
+        checkInValidationStatus:
+          {
+            oneOf:
+              [{ $ref: '#/components/schemas/MonthlyReportValidationStatus' }, { type: 'null' }],
+          }
+        checkOutValidationStatus:
+          {
+            oneOf:
+              [{ $ref: '#/components/schemas/MonthlyReportValidationStatus' }, { type: 'null' }],
+          }
+        validationStatus:
+          oneOf:
+            - { $ref: '#/components/schemas/MonthlyReportValidationStatus' }
+            - { type: string, const: MIXED }
+            - { type: 'null' }
+    MonthlyReport:
+      type: object
+      additionalProperties: false
+      required: [month, filters, definitions, summary, dailyDetails]
+      properties:
+        month: { type: string, pattern: '^\\d{4}-(0[1-9]|1[0-2])$' }
+        filters:
+          type: object
+          additionalProperties: false
+          required: [storeId, employeeId]
+          properties:
+            storeId: { type: [string, 'null'], format: uuid }
+            employeeId: { type: [string, 'null'], format: uuid }
+        definitions:
+          type: object
+          additionalProperties: false
+          required: [workDays, workMinutes, lateMinutes, overtime]
+          properties:
+            workDays: { type: string, const: scheduled_employee_work_dates_excluding_holidays }
+            workMinutes:
+              {
+                type: string,
+                const: valid_approved_pair_rounded_to_nearest_minute_less_shift_break,
+              }
+            lateMinutes:
+              { type: string, const: rounded_minutes_after_scheduled_start_including_tolerance }
+            overtime:
+              { type: string, const: approved_admin_requests_unique_store_when_store_scoped }
+        summary:
+          type: array
+          items: { $ref: '#/components/schemas/MonthlyReportSummaryItem' }
+        dailyDetails:
+          type: array
+          items: { $ref: '#/components/schemas/MonthlyReportDailyDetail' }
+    EmployeeHistoryItem:
+      type: object
+      additionalProperties: false
+      required: [id, date, type, serverTime, validationStatus, store, shift]
+      properties:
+        id: { type: string, format: uuid }
+        date: { $ref: '#/components/schemas/Date' }
+        type: { type: string, enum: [CHECK_IN, CHECK_OUT] }
+        serverTime: { $ref: '#/components/schemas/DateTime' }
+        validationStatus: { type: string }
+        store: { oneOf: [{ $ref: '#/components/schemas/NamedEntity' }, { type: 'null' }] }
+        shift: { oneOf: [{ $ref: '#/components/schemas/NamedEntity' }, { type: 'null' }] }
+    EmployeeRequestStatusItem:
+      type: object
+      additionalProperties: false
+      required: [id, requestType, startDate, endDate, status, requestedAt, decisionAt]
+      properties:
+        id: { type: string, format: uuid }
+        requestType: { $ref: '#/components/schemas/EmployeeRequestType' }
+        startDate: { $ref: '#/components/schemas/Date' }
+        endDate: { $ref: '#/components/schemas/Date' }
+        status: { $ref: '#/components/schemas/RequestStatus' }
+        requestedAt: { $ref: '#/components/schemas/DateTime' }
+        decisionAt: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
+    EmployeeDashboard:
+      type: object
+      additionalProperties: false
+      required: [today, history, requests]
+      properties:
+        today: { type: array, items: { $ref: '#/components/schemas/DashboardShiftItem' } }
+        history:
+          type: object
+          additionalProperties: false
+          required: [items, page, pageSize, hasNextPage]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/EmployeeHistoryItem' } }
+            page: { type: integer }
+            pageSize: { type: integer }
+            hasNextPage: { type: boolean }
+        requests:
+          type: object
+          additionalProperties: false
+          required: [items, page, pageSize, hasNextPage]
+          properties:
+            items:
+              { type: array, items: { $ref: '#/components/schemas/EmployeeRequestStatusItem' } }
+            page: { type: integer }
+            pageSize: { type: integer }
+            hasNextPage: { type: boolean }
+    Notification:
+      type: object
+      additionalProperties: false
+      required: [id, kind, title, message, readAt, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string }
+        title: { type: string }
+        message: { type: string }
+        readAt: { oneOf: [{ $ref: '#/components/schemas/DateTime' }, { type: 'null' }] }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+    NotificationPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, pageSize, hasNextPage, unreadCount]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Notification' } }
+        page: { type: integer }
+        pageSize: { type: integer }
+        hasNextPage: { type: boolean }
+        unreadCount: { type: integer }

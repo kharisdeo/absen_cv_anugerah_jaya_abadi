@@ -65,6 +65,20 @@ classDiagram
       +Boolean assisted
       +calculateDailyStatus()
     }
+    class AttendanceAttempt {
+      +UUID id
+      +String idempotencyKey
+      +DateTime clientRecordedAt
+      +DateTime receivedAt
+      +Decimal latitude
+      +Decimal longitude
+      +Decimal accuracyMeters
+      +Decimal distanceMeters
+      +Int geofenceRadiusMeters
+      +Int accuracyLimitMeters
+      +GeofenceResult geofenceResult
+      +Boolean repeatedCoordinate
+    }
     class SelfieCapture {
       +UUID id
       +String privateObjectKey
@@ -192,6 +206,16 @@ classDiagram
       OVERTIME
       CORRECTION
     }
+    class GeofenceResult {
+      <<enumeration>>
+      WITHIN_LIMITS
+      OUTSIDE_RADIUS
+      ACCURACY_EXCEEDED
+      OUTSIDE_RADIUS_AND_ACCURACY_EXCEEDED
+      STORE_SELECTION_REQUIRED
+      STORE_NOT_ASSIGNED
+      NO_ACTIVE_ASSIGNED_STORE
+    }
     UserAccount "1" --> "1" Employee : authenticates
     Employee "1" --> "0..1" DeviceBinding : registered device
     Employee "1" --> "0..*" StoreLocation : assigned stores
@@ -199,6 +223,9 @@ classDiagram
     ShiftAssignment "*" --> "1" WorkShift : uses
     ShiftAssignment "*" --> "1" StoreLocation : at store
     Employee "1" --> "0..*" Attendance : owns
+    Employee "1" --> "0..*" AttendanceAttempt : submits
+    DeviceBinding "1" --> "0..*" AttendanceAttempt : authenticates
+    StoreLocation "0..1" --> "0..*" AttendanceAttempt : geofence snapshot
     Attendance "1" --> "1" SelfieCapture : contains
     Attendance "1" --> "1" LocationProof : contains
     Attendance "0..*" --> "0..1" AttendanceRequest : may resolve request
@@ -212,6 +239,7 @@ classDiagram
     UserAccount "1" --> "0..*" AuditLog : creates
     MonthlyRecap "1" --> "0..*" Attendance : summarizes
     AttendanceService ..> Attendance : manages
+    AttendanceService ..> AttendanceAttempt : validates geofence
     AttendanceService ..> SelfieCapture : camera/liveness
     AttendanceService ..> LocationProof : GPS/geofence
     AttendanceService ..> DeviceBinding : checks

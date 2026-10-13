@@ -1,0 +1,179 @@
+.admin-shift-assignments {
+  display: grid;
+  gap: 17px;
+  min-width: 0;
+  border-top: 1px solid var(--line, #e6ece9);
+  padding-top: 22px;
+}
+
+.admin-shift-assignments__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.admin-shift-assignments__header h2 {
+  margin: 5px 0 0;
+  font-size: clamp(20px, 2.5vw, 25px);
+  letter-spacing: -0.03em;
+}
+
+.admin-shift-assignments__header p {
+  max-width: 720px;
+  margin: 8px 0 0;
+  color: var(--muted, #73817d);
+  line-height: 1.55;
+}
+
+.admin-shift-assignment-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 13px;
+}
+
+.admin-shift-assignment-card {
+  display: grid;
+  min-width: 0;
+  gap: 15px;
+  border: 1px solid var(--line, #e6ece9);
+  border-radius: 16px;
+  padding: 17px;
+  background: #fff;
+  box-shadow: 0 10px 28px rgb(22 53 46 / 4%);
+}
+
+.admin-shift-assignment-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-shift-assignment-card__header h3 {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 17px;
+  letter-spacing: -0.02em;
+}
+
+.admin-shift-assignment-card__header .ds-status {
+  flex: 0 0 auto;
+}
+
+.admin-shift-assignment-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  margin: 0;
+}
+
+.admin-shift-assignment-facts > div {
+  min-width: 0;
+  border-radius: 11px;
+  padding: 10px 11px;
+  background: #f5f8f7;
+}
+
+.admin-shift-assignment-facts dt {
+  margin-bottom: 4px;
+  color: var(--muted, #73817d);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.admin-shift-assignment-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-shift-assignment-facts__subline {
+  display: block;
+  color: var(--muted, #73817d);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.admin-shift-assignment-card__actions,
+.admin-shift-assignment-form__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+.admin-shift-assignment-form {
+  display: grid;
+  gap: 14px;
+}
+
+.admin-shift-assignment-form__dates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.admin-shift-assignment-form__hint {
+  margin: 0;
+  color: var(--muted, #73817d);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.admin-shift-assignment-form__employee {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line, #e6ece9);
+  border-radius: 12px;
+  padding: 12px;
+  background: #f5f8f7;
+}
+
+.admin-shift-assignment-form__employee > span:last-child {
+  color: var(--muted, #73817d);
+  font-size: 12px;
+}
+
+@media (max-width: 850px) {
+  .admin-shift-assignment-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .admin-shift-assignments__header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .admin-shift-assignments__header > .ds-button {
+    width: 100%;
+  }
+
+  .admin-shift-assignment-card {
+    padding: 14px;
+  }
+
+  .admin-shift-assignment-card__header {
+    flex-direction: column;
+  }
+
+  .admin-shift-assignment-facts,
+  .admin-shift-assignment-form__dates {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-shift-assignment-card__actions,
+  .admin-shift-assignment-form__actions {
+    flex-direction: column-reverse;
+  }
+
+  .admin-shift-assignment-card__actions .ds-button,
+  .admin-shift-assignment-form__actions .ds-button {
+    width: 100%;
+  }
+}

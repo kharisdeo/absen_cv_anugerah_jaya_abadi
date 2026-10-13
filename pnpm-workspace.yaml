@@ -1,0 +1,13 @@
+packages:
+  - apps/*
+  - packages/*
+# Temporary Prisma transitive-dependency security pins. Remove after a stable Prisma
+# release resolves safe versions transitively and the regenerated lockfile/audit confirm it.
+overrides:
+  'deepmerge-ts@7.1.5': 8.0.2
+  'mysql2@3.15.3': 3.24.4
+allowBuilds:
+  argon2: true
+  '@prisma/engines': true
+  esbuild: true
+  prisma: true

@@ -1,0 +1,278 @@
+.admin-holidays {
+  display: grid;
+  min-width: 0;
+  gap: 17px;
+  border-top: 1px solid var(--line, #e6ece9);
+  padding-top: 22px;
+}
+
+.admin-holidays__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.admin-holidays__header h2 {
+  margin: 5px 0 0;
+  font-size: clamp(20px, 2.5vw, 25px);
+  letter-spacing: -0.03em;
+}
+
+.admin-holidays__header p {
+  max-width: 720px;
+  margin: 8px 0 0;
+  color: var(--muted, #73817d);
+  line-height: 1.55;
+}
+
+.admin-holiday-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+  gap: 13px;
+  max-width: 740px;
+}
+
+.admin-holiday-calendar__prompt,
+.admin-holiday-calendar__legend,
+.admin-holiday-form__hint {
+  margin: 0;
+  color: var(--muted, #73817d);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.admin-holiday-calendar {
+  display: grid;
+  gap: 8px;
+  max-width: 760px;
+  border: 1px solid var(--line, #e6ece9);
+  border-radius: 16px;
+  padding: 15px;
+  background: #fff;
+}
+
+.admin-holiday-calendar__grid {
+  display: grid;
+  gap: 5px;
+}
+
+.admin-holiday-calendar__row {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.admin-holiday-calendar__weekday {
+  padding: 5px 2px;
+  color: var(--muted, #73817d);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.admin-holiday-calendar__cell {
+  min-width: 0;
+  min-height: 54px;
+}
+
+.admin-holiday-calendar__day,
+.admin-holiday-calendar__blank {
+  display: flex;
+  width: 100%;
+  min-height: 54px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  background: #f5f8f7;
+  color: var(--ink, #1d2927);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-holiday-calendar__day {
+  flex-direction: column;
+  cursor: pointer;
+}
+
+.admin-holiday-calendar__day:hover {
+  border-color: #9fb7ae;
+  background: #edf4f1;
+}
+
+.admin-holiday-calendar__day:focus-visible {
+  outline: 3px solid #d09338;
+  outline-offset: 2px;
+}
+
+.admin-holiday-calendar__day[aria-pressed='true'] {
+  border-color: var(--green, #123c36);
+  background: #e7f0ec;
+  box-shadow: inset 0 0 0 1px var(--green, #123c36);
+}
+
+.admin-holiday-calendar__day--has-holiday {
+  background: #fff7e8;
+}
+
+.admin-holiday-calendar__count {
+  color: #82571b;
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1;
+}
+
+.admin-holiday-selected-date {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-left: 3px solid var(--green, #123c36);
+  padding: 4px 0 4px 12px;
+}
+
+.admin-holiday-selected-date p {
+  margin: 0;
+  color: var(--muted, #73817d);
+}
+
+.admin-holiday-selected-date strong {
+  color: var(--ink, #1d2927);
+}
+
+.admin-holiday-list {
+  display: grid;
+  gap: 13px;
+}
+
+.admin-holiday-list__heading h3 {
+  margin: 4px 0 0;
+  font-size: 19px;
+  letter-spacing: -0.02em;
+}
+
+.admin-holiday-list__items {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.admin-holiday-card {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 15px;
+  border: 1px solid var(--line, #e6ece9);
+  border-radius: 15px;
+  padding: 15px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgb(22 53 46 / 4%);
+}
+
+.admin-holiday-card__content {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.admin-holiday-card__date {
+  color: var(--ink, #1d2927);
+  font-size: 15px;
+  font-weight: 750;
+}
+
+.admin-holiday-card__content > p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+.admin-holiday-scope {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted, #73817d);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.admin-holiday-card__actions,
+.admin-holiday-form__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.admin-holiday-form {
+  display: grid;
+  gap: 15px;
+}
+
+.admin-holiday-form__description {
+  min-height: 82px;
+  resize: vertical;
+}
+
+@media (max-width: 850px) {
+  .admin-holiday-list__items {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .admin-holidays__header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .admin-holidays__header > .ds-button {
+    width: 100%;
+  }
+
+  .admin-holiday-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-holiday-calendar {
+    padding: 10px;
+  }
+
+  .admin-holiday-calendar__row {
+    gap: 3px;
+  }
+
+  .admin-holiday-calendar__cell,
+  .admin-holiday-calendar__day,
+  .admin-holiday-calendar__blank {
+    min-height: 45px;
+  }
+
+  .admin-holiday-card {
+    flex-direction: column;
+  }
+
+  .admin-holiday-card__actions,
+  .admin-holiday-form__actions {
+    width: 100%;
+    flex-direction: column-reverse;
+  }
+
+  .admin-holiday-card__actions .ds-button,
+  .admin-holiday-form__actions .ds-button {
+    width: 100%;
+  }
+
+  .admin-holiday-selected-date {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

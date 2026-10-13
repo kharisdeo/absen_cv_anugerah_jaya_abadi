@@ -106,7 +106,7 @@ Aturan akses selalu diperiksa di server. Karyawan tidak dapat melihat foto, loka
 
 ### 5.7 Rekap, Excel, dan closing
 
-- `FR-36` Rekap bulanan per karyawan memuat hari kerja, hadir, jumlah/total menit telat, tidak hadir, izin, sakit, cuti, total jam kerja, dan lembur disetujui.
+- `FR-36` Rekap bulanan per karyawan memuat `workDays` (jumlah tanggal kalender unik per karyawan yang jadwal shiftnya telah tiba/berjalan, tidak termasuk hari libur; beberapa shift pada tanggal yang sama dihitung sebagai satu hari), hadir, jumlah/total menit telat, tidak hadir, izin, sakit, cuti, total jam kerja, dan lembur disetujui.
 - `FR-37` Rekap detail harian memuat masuk, pulang, durasi, dan status.
 - `FR-38` Ekspor `.xlsx` menerima filter periode, toko, dan karyawan; hasil memiliki sheet ringkasan dan detail.
 - `FR-39` Rekap yang sudah closing dikunci. Perubahan setelah closing hanya oleh Admin dengan alasan dan audit log.

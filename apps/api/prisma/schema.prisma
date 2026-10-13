@@ -1,0 +1,719 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  ADMIN
+  SUPERVISOR
+  EMPLOYEE
+
+  @@map("user_role")
+}
+
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+
+  @@map("account_status")
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("employee_status")
+}
+
+enum DeviceBindingStatus {
+  PENDING
+  APPROVED
+  REVOKED
+
+  @@map("device_binding_status")
+}
+
+enum AttendanceType {
+  CHECK_IN
+  CHECK_OUT
+
+  @@map("attendance_type")
+}
+
+enum AttendanceValidationStatus {
+  VALID
+  PENDING_VERIFICATION
+  APPROVED
+  REJECTED
+  PENDING_OFFLINE
+
+  @@map("attendance_validation_status")
+}
+
+enum AttendanceRecordStatus {
+  ACTIVE
+  SUPERSEDED
+
+  @@map("attendance_record_status")
+}
+
+enum AttendanceAttemptProcessingStatus {
+  RECEIVED
+  RECORDED
+  RULE_REJECTED
+
+  @@map("attendance_attempt_processing_status")
+}
+
+enum SelfieUploadIntentStatus {
+  PENDING
+  ATTACHED
+
+  @@map("selfie_upload_intent_status")
+}
+
+enum GeofenceResult {
+  WITHIN_LIMITS
+  OUTSIDE_RADIUS
+  ACCURACY_EXCEEDED
+  OUTSIDE_RADIUS_AND_ACCURACY_EXCEEDED
+  STORE_SELECTION_REQUIRED
+  STORE_NOT_ASSIGNED
+  NO_ACTIVE_ASSIGNED_STORE
+
+  @@map("geofence_result")
+}
+
+enum DailyAttendanceStatus {
+  PRESENT
+  LATE
+  EARLY_LEAVE
+  MISSING_CHECKOUT
+  WAITING_VERIFICATION
+  LEAVE
+  SICK
+  ANNUAL_LEAVE
+  HOLIDAY
+  ABSENT
+
+  @@map("daily_attendance_status")
+}
+
+enum ValidationMethod {
+  GPS
+  QR
+  WIFI
+  SUPERVISOR
+  OFFLINE
+  ASSISTED
+
+  @@map("validation_method")
+}
+
+enum NetworkStatus {
+  ONLINE
+  OFFLINE
+
+  @@map("network_status")
+}
+
+enum RequestType {
+  LEAVE
+  SICK
+  ANNUAL_LEAVE
+  OVERTIME
+  CORRECTION
+
+  @@map("request_type")
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+
+  @@map("request_status")
+}
+
+enum RecapStatus {
+  OPEN
+  CLOSED
+
+  @@map("recap_status")
+}
+
+enum NotificationKind {
+  ATTENDANCE_VERIFICATION
+  ATTENDANCE_REQUEST
+  REQUEST_DECISION
+  CORRECTION_DECISION
+  SYSTEM_DISRUPTION
+  RECAP_CLOSED
+
+  @@map("notification_kind")
+}
+
+model UserAccount {
+  id                  String        @id @default(uuid()) @db.Uuid
+  username            String        @unique(map: "user_accounts_username_key")
+  passwordHash        String        @map("password_hash")
+  role                UserRole      @default(EMPLOYEE)
+  status              AccountStatus @default(ACTIVE)
+  mustChangePassword  Boolean       @default(true) @map("must_change_password")
+  failedLoginAttempts Int           @default(0) @map("failed_login_attempts")
+  lockedUntil         DateTime?     @map("locked_until") @db.Timestamptz(3)
+  lastLoginAt         DateTime?     @map("last_login_at") @db.Timestamptz(3)
+  createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  employee                      Employee?
+  approvedDeviceBindings        DeviceBinding[]             @relation("DeviceBindingApprover")
+  assignedEmployeeStores        EmployeeStore[]             @relation("EmployeeStoreAssigner")
+  supervisorStoreAssignments    SupervisorStoreAssignment[] @relation("SupervisorStoreAssignmentSupervisor")
+  assignedSupervisorStores      SupervisorStoreAssignment[] @relation("SupervisorStoreAssignmentAssigner")
+  assignedShiftAssignments      ShiftAssignment[]           @relation("ShiftAssignmentAssigner")
+  reviewedAttendances           Attendance[]                @relation("AttendanceValidationReviewer")
+  approvedAttendanceRequests    AttendanceRequest[]         @relation("AttendanceRequestApprover")
+  reviewedAttendanceCorrections AttendanceCorrection[]      @relation("AttendanceCorrectionReviewer")
+  closedMonthlyRecaps           MonthlyRecap[]              @relation("MonthlyRecapCloser")
+  notifications                 Notification[]
+  auditLogs                     AuditLog[]                  @relation("AuditLogActor")
+  consentRecords                ConsentRecord[]
+  createdSystemDisruptions      SystemDisruption[]          @relation("SystemDisruptionCreator")
+  sessions                      Session[]
+
+  @@map("user_accounts")
+}
+
+model Session {
+  id              String    @id @default(uuid()) @db.Uuid
+  userAccountId   String    @map("user_account_id") @db.Uuid
+  deviceBindingId String?   @map("device_binding_id") @db.Uuid
+  tokenHash       String    @unique(map: "sessions_token_hash_key") @map("token_hash")
+  lastSeenAt      DateTime  @map("last_seen_at") @db.Timestamptz(3)
+  revokedAt       DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  userAccount   UserAccount    @relation(fields: [userAccountId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  deviceBinding DeviceBinding? @relation(fields: [deviceBindingId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([userAccountId, revokedAt], map: "sessions_user_revoked_idx")
+  @@index([deviceBindingId, revokedAt], map: "sessions_device_binding_revoked_idx")
+  @@index([lastSeenAt], map: "sessions_last_seen_idx")
+  @@map("sessions")
+}
+
+model Employee {
+  id             String         @id @default(uuid()) @db.Uuid
+  accountId      String?        @unique(map: "employees_account_id_key") @map("account_id") @db.Uuid
+  nik            String         @unique(map: "employees_nik_key")
+  fullName       String         @map("full_name")
+  position       String?
+  status         EmployeeStatus @default(ACTIVE)
+  employmentDate DateTime?      @map("employment_date") @db.Date
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  account                 UserAccount?           @relation(fields: [accountId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  deviceBindings          DeviceBinding[]
+  storeAssignments        EmployeeStore[]
+  shiftAssignments        ShiftAssignment[]
+  attendanceAttempts      AttendanceAttempt[]
+  attendances             Attendance[]
+  attendanceRequests      AttendanceRequest[]
+  submittedCorrections    AttendanceCorrection[] @relation("AttendanceCorrectionRequester")
+  monthlyRecaps           MonthlyRecap[]
+  dailyAttendanceStatuses DailyAttendance[]
+  consentRecords          ConsentRecord[]
+  selfieUploadIntents     SelfieUploadIntent[]
+
+  @@index([status, fullName], map: "employees_status_full_name_idx")
+  @@map("employees")
+}
+
+model DeviceBinding {
+  id                      String              @id @default(uuid()) @db.Uuid
+  employeeId              String              @map("employee_id") @db.Uuid
+  deviceIdHash            String              @map("device_id_hash")
+  deviceName              String              @map("device_name")
+  status                  DeviceBindingStatus @default(PENDING)
+  requestedAt             DateTime            @default(now()) @map("requested_at") @db.Timestamptz(3)
+  approvedByUserAccountId String?             @map("approved_by_user_account_id") @db.Uuid
+  approvedAt              DateTime?           @map("approved_at") @db.Timestamptz(3)
+  revokedAt               DateTime?           @map("revoked_at") @db.Timestamptz(3)
+  createdAt               DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  employee            Employee             @relation(fields: [employeeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  approver            UserAccount?         @relation("DeviceBindingApprover", fields: [approvedByUserAccountId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  sessions            Session[]
+  attendanceAttempts  AttendanceAttempt[]
+  selfieUploadIntents SelfieUploadIntent[]
+
+  @@unique([employeeId, deviceIdHash], map: "device_bindings_employee_id_device_id_hash_key")
+  @@index([employeeId, status], map: "device_bindings_employee_status_idx")
+  @@map("device_bindings")
+}
+
+model Store {
+  id                  String   @id @default(uuid()) @db.Uuid
+  name                String
+  address             String?
+  latitude            Decimal  @db.Decimal(9, 6)
+  longitude           Decimal  @db.Decimal(9, 6)
+  radiusMeters        Int      @default(10) @map("radius_meters")
+  accuracyLimitMeters Int      @default(30) @map("accuracy_limit_meters")
+  wifiPublicIp        String?  @map("wifi_public_ip") @db.Inet
+  isActive            Boolean  @default(true) @map("is_active")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  employeeAssignments   EmployeeStore[]
+  supervisorAssignments SupervisorStoreAssignment[]
+  shiftAssignments      ShiftAssignment[]
+  attendanceAttempts    AttendanceAttempt[]
+  holidays              Holiday[]
+  attendances           Attendance[]
+  proposedCorrections   AttendanceCorrection[]      @relation("AttendanceCorrectionProposedStore")
+  systemDisruptions     SystemDisruption[]
+  monthlyRecaps         MonthlyRecap[]
+
+  @@index([isActive, name], map: "stores_active_name_idx")
+  @@map("stores")
+}
+
+model EmployeeStore {
+  employeeId              String   @map("employee_id") @db.Uuid
+  storeId                 String   @map("store_id") @db.Uuid
+  assignedByUserAccountId String?  @map("assigned_by_user_account_id") @db.Uuid
+  assignedAt              DateTime @default(now()) @map("assigned_at") @db.Timestamptz(3)
+
+  employee Employee     @relation(fields: [employeeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  store    Store        @relation(fields: [storeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  assigner UserAccount? @relation("EmployeeStoreAssigner", fields: [assignedByUserAccountId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@id([employeeId, storeId])
+  @@index([storeId, employeeId], map: "employee_stores_store_employee_idx")
+  @@map("employee_stores")
+}
+
+/// Trusted Admin-managed store scope for a Supervisor. This is intentionally a simple
+/// assignment relation: it has no effective dates or extra business status.
+model SupervisorStoreAssignment {
+  supervisorUserAccountId String   @map("supervisor_user_account_id") @db.Uuid
+  storeId                 String   @map("store_id") @db.Uuid
+  assignedByUserAccountId String?  @map("assigned_by_user_account_id") @db.Uuid
+  assignedAt              DateTime @default(now()) @map("assigned_at") @db.Timestamptz(3)
+
+  supervisor UserAccount  @relation("SupervisorStoreAssignmentSupervisor", fields: [supervisorUserAccountId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  store      Store        @relation(fields: [storeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  assigner   UserAccount? @relation("SupervisorStoreAssignmentAssigner", fields: [assignedByUserAccountId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@id([supervisorUserAccountId, storeId])
+  @@index([storeId, supervisorUserAccountId], map: "supervisor_store_assignments_store_user_idx")
+  @@map("supervisor_store_assignments")
+}
+
+model WorkShift {
+  id                   String   @id @default(uuid()) @db.Uuid
+  name                 String
+  startTime            DateTime @map("start_time") @db.Time(0)
+  endTime              DateTime @map("end_time") @db.Time(0)
+  breakMinutes         Int      @default(0) @map("break_minutes")
+  lateToleranceMinutes Int      @default(0) @map("late_tolerance_minutes")
+  workDays             Int[]    @map("work_days")
+  isActive             Boolean  @default(true) @map("is_active")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  assignments ShiftAssignment[]
+
+  @@index([isActive, name], map: "work_shifts_active_name_idx")
+  @@map("work_shifts")
+}
+
+model ShiftAssignment {
+  id                      String    @id @default(uuid()) @db.Uuid
+  employeeId              String    @map("employee_id") @db.Uuid
+  workShiftId             String    @map("work_shift_id") @db.Uuid
+  storeId                 String?   @map("store_id") @db.Uuid
+  assignedByUserAccountId String?   @map("assigned_by_user_account_id") @db.Uuid
+  effectiveFrom           DateTime  @map("effective_from") @db.Date
+  effectiveTo             DateTime? @map("effective_to") @db.Date
+  createdAt               DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  employee                Employee          @relation(fields: [employeeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  workShift               WorkShift         @relation(fields: [workShiftId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  store                   Store?            @relation(fields: [storeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  assigner                UserAccount?      @relation("ShiftAssignmentAssigner", fields: [assignedByUserAccountId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  attendances             Attendance[]
+  dailyAttendanceStatuses DailyAttendance[]
+
+  @@unique([id, employeeId], map: "shift_assignments_id_employee_id_key")
+  @@index([employeeId, effectiveFrom, effectiveTo], map: "shift_assignments_employee_effective_idx")
+  @@index([storeId, effectiveFrom, effectiveTo], map: "shift_assignments_store_effective_idx")
+  @@map("shift_assignments")
+}
+
+/// Store/date uniqueness is declared below. The partial unique index for national
+/// (store_id IS NULL) dates is PostgreSQL-only and is created in migration 0001_initial.
+model Holiday {
+  id          String   @id @default(uuid()) @db.Uuid
+  storeId     String?  @map("store_id") @db.Uuid
+  holidayDate DateTime @map("holiday_date") @db.Date
+  description String
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  store Store? @relation(fields: [storeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  /// PostgreSQL UNIQUE treats NULL values as distinct; this protects store-specific holidays only.
+  @@unique([storeId, holidayDate], map: "holidays_store_date_key")
+  @@index([holidayDate], map: "holidays_date_idx")
+  @@map("holidays")
+}
+
+model Attendance {
+  id                                String                     @id @default(uuid()) @db.Uuid
+  employeeId                        String                     @map("employee_id") @db.Uuid
+  storeId                           String?                    @map("store_id") @db.Uuid
+  shiftAssignmentId                 String?                    @map("shift_assignment_id") @db.Uuid
+  sourceAttemptId                   String?                    @unique(map: "attendances_source_attempt_id_key") @map("source_attempt_id") @db.Uuid
+  workDate                          DateTime                   @map("work_date") @db.Date
+  type                              AttendanceType
+  serverTime                        DateTime                   @map("server_time") @db.Timestamptz(3)
+  deviceTime                        DateTime?                  @map("device_time") @db.Timestamptz(3)
+  validationStatus                  AttendanceValidationStatus @default(PENDING_VERIFICATION) @map("validation_status")
+  validationReviewedByUserAccountId String?                    @map("validation_reviewed_by_user_account_id") @db.Uuid
+  validationReviewedAt              DateTime?                  @map("validation_reviewed_at") @db.Timestamptz(3)
+  validationReason                  String?                    @map("validation_reason")
+  recordStatus                      AttendanceRecordStatus     @default(ACTIVE) @map("record_status")
+  method                            ValidationMethod
+  networkStatus                     NetworkStatus              @map("network_status")
+  idempotencyKey                    String                     @unique(map: "attendances_idempotency_key_key") @map("idempotency_key") @db.Uuid
+  proofCode                         String?                    @unique(map: "attendances_proof_code_key") @map("proof_code")
+  deviceIdHash                      String?                    @map("device_id_hash")
+  clientIp                          String?                    @map("client_ip") @db.Inet
+  createdAt                         DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  employee           Employee               @relation(fields: [employeeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  validationReviewer UserAccount?           @relation("AttendanceValidationReviewer", fields: [validationReviewedByUserAccountId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  store              Store?                 @relation(fields: [storeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  shiftAssignment    ShiftAssignment?       @relation(fields: [shiftAssignmentId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  sourceAttempt      AttendanceAttempt?     @relation(fields: [sourceAttemptId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  selfieCapture      SelfieCapture?
+  locationProof      LocationProof?
+  corrections        AttendanceCorrection[]
+
+  @@index([employeeId, workDate, validationStatus], map: "attendances_employee_date_validation_idx")
+  @@index([storeId, workDate, validationStatus], map: "attendances_store_date_validation_idx")
+  @@index([storeId, validationStatus, serverTime], map: "attendances_store_validation_time_idx")
+  @@index([validationStatus, serverTime], map: "attendances_validation_time_idx")
+  @@index([employeeId, serverTime], map: "attendances_employee_server_time_idx")
+  @@map("attendances")
+}
+
+/// Durable derived daily status. Raw Attendance and AttendanceAttempt rows remain untouched.
+model DailyAttendance {
+  id                                String                @id @default(uuid()) @db.Uuid
+  employeeId                        String                @map("employee_id") @db.Uuid
+  shiftAssignmentId                 String                @map("shift_assignment_id") @db.Uuid
+  workDate                          DateTime              @map("work_date") @db.Date
+  status                            DailyAttendanceStatus
+  evaluatedAt                       DateTime              @map("evaluated_at") @db.Timestamptz(3)
+  correctedByAttendanceCorrectionId String?               @map("corrected_by_attendance_correction_id") @db.Uuid
+  createdAt                         DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                         DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  employee        Employee              @relation(fields: [employeeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  shiftAssignment ShiftAssignment       @relation(fields: [shiftAssignmentId, employeeId], references: [id, employeeId], onDelete: Restrict, onUpdate: Cascade)
+  correction      AttendanceCorrection? @relation(fields: [correctedByAttendanceCorrectionId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([employeeId, shiftAssignmentId, workDate], map: "daily_attendance_employee_assignment_date_key")
+  @@index([employeeId, workDate, status], map: "daily_attendance_employee_date_status_idx")
+  @@index([workDate, status], map: "daily_attendance_date_status_idx")
+  @@map("daily_attendance_statuses")
+}
+
+/// Immutable receipt of a client submission. This is not a validated attendance record.
+model AttendanceAttempt {
+  id                        String                            @id @default(uuid()) @db.Uuid
+  employeeId                String                            @map("employee_id") @db.Uuid
+  deviceBindingId           String                            @map("device_binding_id") @db.Uuid
+  type                      AttendanceType
+  clientRecordedAt          DateTime                          @map("client_recorded_at") @db.Timestamptz(3)
+  networkStatus             NetworkStatus                     @map("network_status")
+  reportedMethod            ValidationMethod                  @map("reported_method")
+  latitude                  Decimal                           @db.Decimal(9, 6)
+  longitude                 Decimal                           @db.Decimal(9, 6)
+  accuracyMeters            Decimal                           @map("accuracy_meters") @db.Decimal(8, 2)
+  storeId                   String?                           @map("store_id") @db.Uuid
+  distanceMeters            Decimal?                          @map("distance_meters") @db.Decimal(14, 6)
+  geofenceRadiusMeters      Int?                              @map("geofence_radius_meters")
+  accuracyLimitMeters       Int?                              @map("accuracy_limit_meters")
+  geofenceResult            GeofenceResult                    @default(NO_ACTIVE_ASSIGNED_STORE) @map("geofence_result")
+  repeatedCoordinate        Boolean                           @default(false) @map("repeated_coordinate")
+  selfieReferenceHash       String                            @map("selfie_reference_hash") @db.Char(64)
+  selfieSizeBytes           Int                               @map("selfie_size_bytes")
+  livenessFaceDetectedClaim Boolean                           @map("liveness_face_detected_claim")
+  livenessPassedClaim       Boolean                           @map("liveness_passed_claim")
+  idempotencyKey            String                            @map("idempotency_key") @db.Uuid
+  requestFingerprint        String                            @map("request_fingerprint") @db.Char(64)
+  deviceIdHash              String                            @map("device_id_hash")
+  clientIp                  String?                           @map("client_ip") @db.Inet
+  processingStatus          AttendanceAttemptProcessingStatus @default(RECEIVED) @map("processing_status")
+  processingErrorCode       String?                           @map("processing_error_code")
+  receivedAt                DateTime                          @default(now()) @map("received_at") @db.Timestamptz(3)
+
+  employee           Employee            @relation(fields: [employeeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  deviceBinding      DeviceBinding       @relation(fields: [deviceBindingId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  store              Store?              @relation(fields: [storeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  selfieUploadIntent SelfieUploadIntent?
+  attendance         Attendance?
+
+  @@unique([employeeId, idempotencyKey], map: "attendance_attempts_employee_idempotency_key")
+  @@index([employeeId, receivedAt], map: "attendance_attempts_employee_received_idx")
+  @@index([employeeId, latitude, longitude], map: "attendance_attempts_employee_coordinate_idx")
+  @@map("attendance_attempts")
+}
+
+/// Private staging metadata and the one-time association to a received attempt.
+/// Only the UUID hash is retained as the client reference; object keys stay server-side.
+model SelfieUploadIntent {
+  referenceHash      String                   @id @map("reference_hash") @db.Char(64)
+  employeeId         String                   @map("employee_id") @db.Uuid
+  deviceBindingId    String                   @map("device_binding_id") @db.Uuid
+  objectKey          String?                  @unique(map: "selfie_upload_intents_object_key_key") @map("object_key")
+  stagingObjectKey   String?                  @map("staging_object_key")
+  sealedObjectKey    String?                  @unique(map: "selfie_upload_intents_sealed_object_key_key") @map("sealed_object_key")
+  contentType        String                   @map("content_type")
+  declaredSizeBytes  Int                      @map("declared_size_bytes")
+  status             SelfieUploadIntentStatus @default(PENDING)
+  expiresAt          DateTime                 @map("expires_at") @db.Timestamptz(3)
+  retentionExpiresAt DateTime?                @map("retention_expires_at") @db.Timestamptz(3)
+  attachedAttemptId  String?                  @unique(map: "selfie_upload_intents_attached_attempt_id_key") @map("attached_attempt_id") @db.Uuid
+  watermarkMetadata  Json?                    @map("watermark_metadata")
+  deletedAt          DateTime?                @map("deleted_at") @db.Timestamptz(3)
+  purgeClaimedAt     DateTime?                @map("purge_claimed_at") @db.Timestamptz(3)
+  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime                 @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  employee        Employee           @relation(fields: [employeeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  deviceBinding   DeviceBinding      @relation(fields: [deviceBindingId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  attachedAttempt AttendanceAttempt? @relation(fields: [attachedAttemptId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([employeeId, status, expiresAt], map: "selfie_upload_intents_employee_status_expiry_idx")
+  @@index([deviceBindingId, status, expiresAt], map: "selfie_upload_intents_binding_status_expiry_idx")
+  @@index([retentionExpiresAt], map: "selfie_upload_intents_retention_idx")
+  @@index([status, retentionExpiresAt], map: "selfie_upload_intents_status_retention_idx")
+  @@index([status, createdAt], map: "selfie_upload_intents_status_created_idx")
+  @@map("selfie_upload_intents")
+}
+
+model SelfieCapture {
+  id                 String    @id @default(uuid()) @db.Uuid
+  attendanceId       String    @unique(map: "selfie_captures_attendance_id_key") @map("attendance_id") @db.Uuid
+  objectKey          String?   @unique(map: "selfie_captures_object_key_key") @map("object_key")
+  contentType        String    @map("content_type")
+  sizeBytes          Int       @map("size_bytes")
+  watermarkApplied   Boolean   @default(false) @map("watermark_applied")
+  watermarkMetadata  Json?     @map("watermark_metadata")
+  faceDetected       Boolean   @default(false) @map("face_detected")
+  livenessPassed     Boolean   @default(false) @map("liveness_passed")
+  capturedAt         DateTime  @map("captured_at") @db.Timestamptz(3)
+  retentionExpiresAt DateTime  @map("retention_expires_at") @db.Timestamptz(3)
+  deletedAt          DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  attendance Attendance @relation(fields: [attendanceId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([retentionExpiresAt, deletedAt], map: "selfie_captures_retention_idx")
+  @@map("selfie_captures")
+}
+
+model LocationProof {
+  id             String           @id @default(uuid()) @db.Uuid
+  attendanceId   String           @unique(map: "location_proofs_attendance_id_key") @map("attendance_id") @db.Uuid
+  latitude       Decimal          @db.Decimal(9, 6)
+  longitude      Decimal          @db.Decimal(9, 6)
+  accuracyMeters Decimal          @map("accuracy_meters") @db.Decimal(8, 2)
+  distanceMeters Decimal?         @map("distance_meters") @db.Decimal(10, 2)
+  isMocked       Boolean          @default(false) @map("is_mocked")
+  source         ValidationMethod
+  capturedAt     DateTime         @map("captured_at") @db.Timestamptz(3)
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  attendance Attendance @relation(fields: [attendanceId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@map("location_proofs")
+}
+
+model AttendanceRequest {
+  id                       String        @id @default(uuid()) @db.Uuid
+  employeeId               String        @map("employee_id") @db.Uuid
+  requestType              RequestType   @map("request_type")
+  startDate                DateTime      @map("start_date") @db.Date
+  endDate                  DateTime      @map("end_date") @db.Date
+  reason                   String
+  attachmentObjectKey      String?       @map("attachment_object_key")
+  requestedOvertimeMinutes Int?          @map("requested_overtime_minutes")
+  status                   RequestStatus @default(PENDING)
+  approverUserAccountId    String?       @map("approver_user_account_id") @db.Uuid
+  decisionAt               DateTime?     @map("decision_at") @db.Timestamptz(3)
+  decisionNote             String?       @map("decision_note")
+  requestedAt              DateTime      @default(now()) @map("requested_at") @db.Timestamptz(3)
+  createdAt                DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  employee   Employee              @relation(fields: [employeeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  approver   UserAccount?          @relation("AttendanceRequestApprover", fields: [approverUserAccountId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  correction AttendanceCorrection?
+
+  @@index([employeeId, status, requestedAt], map: "attendance_requests_employee_status_idx")
+  @@index([status, requestedAt], map: "attendance_requests_status_requested_idx")
+  @@map("attendance_requests")
+}
+
+model AttendanceCorrection {
+  id                      String          @id @default(uuid()) @db.Uuid
+  attendanceId            String?         @map("attendance_id") @db.Uuid
+  attendanceRequestId     String?         @unique(map: "attendance_corrections_request_id_key") @map("attendance_request_id") @db.Uuid
+  requestedByEmployeeId   String          @map("requested_by_employee_id") @db.Uuid
+  proposedType            AttendanceType? @map("proposed_type")
+  proposedServerTime      DateTime?       @map("proposed_server_time") @db.Timestamptz(3)
+  proposedDeviceTime      DateTime?       @map("proposed_device_time") @db.Timestamptz(3)
+  proposedStoreId         String?         @map("proposed_store_id") @db.Uuid
+  reason                  String
+  evidenceObjectKey       String?         @map("evidence_object_key")
+  status                  RequestStatus   @default(PENDING)
+  reviewedByUserAccountId String?         @map("reviewed_by_user_account_id") @db.Uuid
+  reviewedAt              DateTime?       @map("reviewed_at") @db.Timestamptz(3)
+  reviewNote              String?         @map("review_note")
+  createdAt               DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  attendance    Attendance?        @relation(fields: [attendanceId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  request       AttendanceRequest? @relation(fields: [attendanceRequestId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  requester     Employee           @relation("AttendanceCorrectionRequester", fields: [requestedByEmployeeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  reviewer      UserAccount?       @relation("AttendanceCorrectionReviewer", fields: [reviewedByUserAccountId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  proposedStore Store?             @relation("AttendanceCorrectionProposedStore", fields: [proposedStoreId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  dailyStatuses DailyAttendance[]
+
+  @@index([attendanceId, status], map: "attendance_corrections_attendance_status_idx")
+  @@index([requestedByEmployeeId, status, createdAt], map: "attendance_corrections_requester_status_idx")
+  @@map("attendance_corrections")
+}
+
+model SystemDisruption {
+  id                     String   @id @default(uuid()) @db.Uuid
+  storeId                String?  @map("store_id") @db.Uuid
+  startsAt               DateTime @map("starts_at") @db.Timestamptz(3)
+  endsAt                 DateTime @map("ends_at") @db.Timestamptz(3)
+  reason                 String
+  isActive               Boolean  @default(true) @map("is_active")
+  createdByUserAccountId String   @map("created_by_user_account_id") @db.Uuid
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  store   Store?      @relation(fields: [storeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  creator UserAccount @relation("SystemDisruptionCreator", fields: [createdByUserAccountId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([storeId, isActive, startsAt, endsAt], map: "system_disruptions_store_active_period_idx")
+  @@map("system_disruptions")
+}
+
+model MonthlyRecap {
+  id                      String      @id @default(uuid()) @db.Uuid
+  employeeId              String      @map("employee_id") @db.Uuid
+  storeId                 String?     @map("store_id") @db.Uuid
+  periodStart             DateTime    @map("period_start") @db.Date
+  status                  RecapStatus @default(OPEN)
+  workDays                Int         @default(0) @map("work_days")
+  presentDays             Int         @default(0) @map("present_days")
+  lateDays                Int         @default(0) @map("late_days")
+  lateMinutes             Int         @default(0) @map("late_minutes")
+  absentDays              Int         @default(0) @map("absent_days")
+  leaveDays               Int         @default(0) @map("leave_days")
+  sickDays                Int         @default(0) @map("sick_days")
+  annualLeaveDays         Int         @default(0) @map("annual_leave_days")
+  totalWorkMinutes        Int         @default(0) @map("total_work_minutes")
+  approvedOvertimeMinutes Int         @default(0) @map("approved_overtime_minutes")
+  snapshot                Json?
+  closedByUserAccountId   String?     @map("closed_by_user_account_id") @db.Uuid
+  closedAt                DateTime?   @map("closed_at") @db.Timestamptz(3)
+  createdAt               DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  employee Employee     @relation(fields: [employeeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  store    Store?       @relation(fields: [storeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  closer   UserAccount? @relation("MonthlyRecapCloser", fields: [closedByUserAccountId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([employeeId, periodStart, storeId], map: "monthly_recaps_employee_period_store_key")
+  @@index([periodStart, status, storeId], map: "monthly_recaps_period_status_store_idx")
+  @@map("monthly_recaps")
+}
+
+model Notification {
+  id            String           @id @default(uuid()) @db.Uuid
+  userAccountId String           @map("user_account_id") @db.Uuid
+  kind          NotificationKind
+  title         String
+  message       String
+  payload       Json?
+  readAt        DateTime?        @map("read_at") @db.Timestamptz(3)
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  userAccount UserAccount @relation(fields: [userAccountId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([userAccountId, readAt, createdAt], map: "notifications_user_read_created_idx")
+  @@map("notifications")
+}
+
+model AuditLog {
+  id                 String   @id @default(uuid()) @db.Uuid
+  actorUserAccountId String?  @map("actor_user_account_id") @db.Uuid
+  action             String
+  entityType         String   @map("entity_type")
+  entityId           String?  @map("entity_id")
+  beforeData         Json?    @map("before_data")
+  afterData          Json?    @map("after_data")
+  reason             String?
+  clientIp           String?  @map("client_ip") @db.Inet
+  deviceIdHash       String?  @map("device_id_hash")
+  requestId          String?  @map("request_id") @db.Uuid
+  occurredAt         DateTime @default(now()) @map("occurred_at") @db.Timestamptz(3)
+
+  actor UserAccount? @relation("AuditLogActor", fields: [actorUserAccountId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([occurredAt], map: "audit_logs_occurred_at_idx")
+  @@index([actorUserAccountId, occurredAt], map: "audit_logs_actor_occurred_idx")
+  @@index([entityType, entityId, occurredAt], map: "audit_logs_entity_occurred_idx")
+  @@map("audit_logs")
+}
+
+model ConsentRecord {
+  id              String    @id @default(uuid()) @db.Uuid
+  userAccountId   String    @map("user_account_id") @db.Uuid
+  employeeId      String?   @map("employee_id") @db.Uuid
+  policyVersion   String    @map("policy_version")
+  consentTextHash String    @map("consent_text_hash")
+  purposes        Json
+  acceptedAt      DateTime  @map("accepted_at") @db.Timestamptz(3)
+  withdrawnAt     DateTime? @map("withdrawn_at") @db.Timestamptz(3)
+  clientIp        String?   @map("client_ip") @db.Inet
+  deviceIdHash    String?   @map("device_id_hash")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  userAccount UserAccount @relation(fields: [userAccountId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  employee    Employee?   @relation(fields: [employeeId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([userAccountId, acceptedAt], map: "consent_records_user_accepted_idx")
+  @@index([employeeId, acceptedAt], map: "consent_records_employee_accepted_idx")
+  @@map("consent_records")
+}

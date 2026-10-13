@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm and Node.js
+        uses: pnpm/setup@v3
+        with:
+          version: 11.25.0
+          runtime: node@22
+          require-lockfile: true
+          cache: true
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Validate Prisma schema
+        run: pnpm --filter @absen/api db:validate
+
+      - name: Audit dependency advisories
+        run: pnpm audit --audit-level=high
+
+      - name: Run project checks
+        run: pnpm check
+
+  postgres-integration:
+    name: PostgreSQL migration, readiness, and auth/session smoke
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://absen_ci:ci-only-password@localhost:5432/absen_ci?schema=public
+    services:
+      postgres:
+        image: postgres:17.11-alpine3.24
+        env:
+          POSTGRES_DB: absen_ci
+          POSTGRES_USER: absen_ci
+          POSTGRES_PASSWORD: ci-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U absen_ci -d absen_ci"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+          --health-start-period 5s
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm and Node.js
+        uses: pnpm/setup@v3
+        with:
+          version: 11.25.0
+          runtime: node@22
+          require-lockfile: true
+          cache: true
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Generate Prisma Client
+        run: pnpm --filter @absen/api db:generate
+
+      - name: Apply migrations to the ephemeral database
+        run: pnpm --filter @absen/api db:migrate:deploy
+
+      - name: Run PostgreSQL-backed auth/session integration smoke
+        run: pnpm --filter @absen/api test:postgres
