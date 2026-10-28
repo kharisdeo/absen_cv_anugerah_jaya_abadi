@@ -17,7 +17,8 @@ type CapturedRequest = Readonly<{
   credentials: RequestCredentials | undefined;
   cache: RequestCache | undefined;
 }>;
-type InitialServerState = 'unauthenticated' | 'unavailable' | 'consent' | 'password';
+type InitialServerState =
+  'unauthenticated' | 'unavailable' | 'consent' | 'password' | 'device-pending';
 
 const mountedApps: MountedApp[] = [];
 const role: UserRole = 'ADMIN';
@@ -76,13 +77,14 @@ function makeUser(
   consentRequired: boolean,
   mustChangePassword: boolean,
   userRole: UserRole = role,
+  deviceBindingStatus: AuthUser['deviceBindingStatus'] = null,
 ): AuthUser {
   return {
     id: userId,
     username,
     role: userRole,
-    employeeId: null,
-    deviceBindingStatus: null,
+    employeeId: userRole === 'ADMIN' ? null : '00000000-0000-4000-8000-000000000902',
+    deviceBindingStatus: userRole === 'ADMIN' ? null : deviceBindingStatus,
     consentRequired,
     mustChangePassword,
   };
@@ -97,9 +99,11 @@ function jsonResponse(value: unknown, status = 200): Response {
 
 function createServer(initial: InitialServerState) {
   const requests: CapturedRequest[] = [];
-  let authenticated = initial === 'consent' || initial === 'password';
-  let consentAccepted = initial === 'password';
-  let passwordChanged = false;
+  let authenticated =
+    initial === 'consent' || initial === 'password' || initial === 'device-pending';
+  let consentAccepted = initial === 'password' || initial === 'device-pending';
+  let passwordChanged = initial === 'device-pending';
+  let deviceApproved = false;
 
   const fetchMock = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -125,12 +129,22 @@ function createServer(initial: InitialServerState) {
           return jsonResponse({ code: 'SERVICE_UNAVAILABLE' }, 503);
         }
         if (!authenticated) return jsonResponse({ code: 'UNAUTHENTICATED' }, 401);
-        return jsonResponse({ user: makeUser(!consentAccepted, !passwordChanged) });
+        const userRole = initial === 'device-pending' ? 'EMPLOYEE' : role;
+        const deviceBindingStatus =
+          initial === 'device-pending' ? (deviceApproved ? 'APPROVED' : 'PENDING') : null;
+        return jsonResponse({
+          user: makeUser(!consentAccepted, !passwordChanged, userRole, deviceBindingStatus),
+        });
       }
 
       if (url.pathname === '/api/v1/auth/login' && method === 'POST') {
         authenticated = true;
         return jsonResponse({ ok: true });
+      }
+
+      if (url.pathname === '/api/v1/auth/logout' && method === 'POST') {
+        authenticated = false;
+        return new Response(null, { status: 204 });
       }
 
       if (url.pathname === '/api/v1/consents/current' && method === 'GET') {
@@ -154,7 +168,13 @@ function createServer(initial: InitialServerState) {
   );
 
   vi.stubGlobal('fetch', fetchMock);
-  return { requests, fetchMock };
+  return {
+    requests,
+    fetchMock,
+    approveDevice: () => {
+      deviceApproved = true;
+    },
+  };
 }
 
 async function flushUpdates(): Promise<void> {
@@ -218,23 +238,84 @@ function expectNoWorkArea(container: HTMLElement): void {
   expect(container.textContent).not.toContain('Akun pengguna');
 }
 
-function expectNoAuthSecretsInBrowserStorage(): void {
-  const entries = [window.localStorage, window.sessionStorage].flatMap((storage) =>
-    Array.from({ length: storage.length }, (_, index) => {
-      const key = storage.key(index);
-      return key === null ? '' : `${key}=${storage.getItem(key) ?? ''}`;
-    }),
-  );
-  const stored = entries.join('\n');
-  expect(window.localStorage.length).toBe(0);
+function expectNoAuthSecretsInBrowserStorage(deviceToken: string): void {
+  const storedValues = [window.localStorage, window.sessionStorage]
+    .flatMap((storage) =>
+      Array.from({ length: storage.length }, (_, index) => {
+        const key = storage.key(index);
+        return key === null ? '' : (storage.getItem(key) ?? '');
+      }),
+    )
+    .join('\n');
+  expect(window.localStorage.length).toBe(1);
+  expect(window.localStorage.key(0)).toBe('absen_device_token');
+  expect(window.localStorage.getItem('absen_device_token')).toBe(deviceToken);
   expect(window.sessionStorage.length).toBe(0);
-  expect(stored).not.toMatch(/password|token|bearer|session/i);
-  expect(stored).not.toContain(loginPassword);
-  expect(stored).not.toContain(currentPassword);
-  expect(stored).not.toContain(newPassword);
+  expect(storedValues).not.toMatch(/password|bearer|session/i);
+  expect(storedValues).not.toContain(loginPassword);
+  expect(storedValues).not.toContain(currentPassword);
+  expect(storedValues).not.toContain(newPassword);
 }
 
 describe('actual App first-login and onboarding flow', () => {
+  it('explains the separate device approval and enters the employee workspace after rechecking', async () => {
+    const server = createServer('device-pending');
+    const app = await mountApp('/login');
+
+    await waitFor(
+      () => app.container.textContent?.includes('Perangkat menunggu persetujuan') === true,
+      'pending device approval status',
+    );
+    expect(app.container.textContent).toContain(
+      'Persetujuan privasi berbeda dari persetujuan perangkat',
+    );
+    expect(app.container.textContent).toContain('Akun pengguna');
+    expect(app.container.textContent).toContain(username);
+    expect(app.container.querySelector('aside[aria-label="Navigasi utama"]')).toBeNull();
+    expect(app.container.querySelector('a[href="/admin/accounts"]')).toBeNull();
+    expect(server.requests.filter(({ pathname }) => pathname === '/api/v1/auth/me')).toHaveLength(
+      1,
+    );
+
+    server.approveDevice();
+    await clickAndFlush(requireButton(app.container, 'Periksa persetujuan'));
+
+    await waitFor(
+      () =>
+        window.location.pathname === '/employee' &&
+        app.container.querySelector('aside[aria-label="Navigasi utama"]') !== null,
+      'employee workspace after device approval is refreshed',
+    );
+    expect(server.requests.filter(({ pathname }) => pathname === '/api/v1/auth/me')).toHaveLength(
+      2,
+    );
+    expect(
+      server.requests.filter(({ pathname }) => pathname.startsWith('/api/v1/admin/')),
+    ).toHaveLength(0);
+  });
+
+  it('logs out of a pending employee session to let the user switch to Admin', async () => {
+    const server = createServer('device-pending');
+    const app = await mountApp('/login');
+
+    await waitFor(
+      () => app.container.textContent?.includes('Perangkat menunggu persetujuan') === true,
+      'pending device approval status',
+    );
+    await clickAndFlush(requireButton(app.container, 'Keluar untuk ganti akun'));
+
+    await waitFor(
+      () => app.container.textContent?.includes('Selamat datang') === true,
+      'login page after logout',
+    );
+    expect(
+      server.requests.some(
+        ({ method, pathname }) => method === 'POST' && pathname === '/api/v1/auth/logout',
+      ),
+    ).toBe(true);
+    expectNoWorkArea(app.container);
+  });
+
   it('requires server policy consent, changes the initial password, then lands on the refreshed session role', async () => {
     const server = createServer('unauthenticated');
     window.history.replaceState({}, '', '/employee/history');
@@ -309,12 +390,18 @@ describe('actual App first-login and onboarding flow', () => {
     );
     expect(app.container.querySelector('a[href="/employee/history"]')).toBeNull();
     expect(server.requests.filter(({ pathname }) => pathname === '/api/v1/auth/me').length).toBe(4);
-    expect(server.requests.find(({ pathname }) => pathname === '/api/v1/auth/login')?.body).toEqual(
-      {
-        identifier: username,
-        password: loginPassword,
-      },
-    );
+    const loginBody = server.requests.find(
+      ({ pathname }) => pathname === '/api/v1/auth/login',
+    )?.body;
+    expect(loginBody).toMatchObject({ identifier: username, password: loginPassword });
+    const deviceToken = loginBody?.deviceToken;
+    expect(deviceToken).toEqual(expect.stringMatching(/^[A-Za-z0-9_-]{32,128}$/));
+    if (typeof deviceToken !== 'string') throw new Error('Expected a valid login device token');
+    const deviceName = loginBody?.deviceName;
+    expect(typeof deviceName).toBe('string');
+    if (typeof deviceName !== 'string') throw new Error('Expected a valid login device name');
+    expect(deviceName.trim().length).toBeGreaterThan(0);
+    expect(deviceName.length).toBeLessThanOrEqual(100);
     expect(
       server.requests.find(
         ({ method, pathname }) => method === 'POST' && pathname === '/api/v1/consents',
@@ -336,7 +423,7 @@ describe('actual App first-login and onboarding flow', () => {
     expect(newPasswordField.value).toBe('');
     expect(confirmationField.value).toBe('');
     expect(app.container.querySelectorAll('input[type="password"]')).toHaveLength(0);
-    expectNoAuthSecretsInBrowserStorage();
+    expectNoAuthSecretsInBrowserStorage(deviceToken);
   });
 
   it('keeps direct protected routes closed when session verification is unavailable', async () => {

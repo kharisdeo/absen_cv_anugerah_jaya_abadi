@@ -15,21 +15,41 @@ const OTHER_STORE_ID = '00000000-0000-4000-8000-000000000002';
 const actor: AuditActor = { userAccountId: ADMIN_ID, role: UserRole.ADMIN };
 const start = '2026-10-11T09:00:00+07:00';
 const end = '2026-10-11T11:00:00+07:00';
+const KEY_1 = '10000000-0000-4000-8000-000000000001';
+const KEY_2 = '10000000-0000-4000-8000-000000000002';
+const KEY_3 = '10000000-0000-4000-8000-000000000003';
 
 class FakeSystemDisruptionRepository implements SystemDisruptionRepository {
   readonly rows: SystemDisruptionRecord[] = [];
-  readonly createInputs: Parameters<SystemDisruptionRepository['create']>[0][] = [];
+  readonly createInputs: Parameters<SystemDisruptionRepository['createIdempotently']>[0][] = [];
+  private readonly idempotency = new Map<
+    string,
+    Readonly<{ fingerprint: string; record: SystemDisruptionRecord }>
+  >();
 
-  async create(input: Parameters<SystemDisruptionRepository['create']>[0]) {
+  async createIdempotently(
+    input: Parameters<SystemDisruptionRepository['createIdempotently']>[0],
+    writeAudit: Parameters<SystemDisruptionRepository['createIdempotently']>[1],
+  ) {
     this.createInputs.push(input);
+    const identity = `${input.createdByUserAccountId}:${input.idempotencyKeyHash}`;
+    const existing = this.idempotency.get(identity);
+    if (existing) {
+      if (existing.fingerprint !== input.requestFingerprint) {
+        throw new AppError(409, 'IDEMPOTENCY_KEY_REUSED', 'Key payload conflict.');
+      }
+      return { record: existing.record, replayed: true };
+    }
     const row: SystemDisruptionRecord = {
       ...input,
       isActive: true,
       createdAt: new Date('2026-10-11T03:00:00.000Z'),
       updatedAt: new Date('2026-10-11T03:00:00.000Z'),
     };
+    await writeAudit({} as never);
     this.rows.push(row);
-    return row;
+    this.idempotency.set(identity, { fingerprint: input.requestFingerprint, record: row });
+    return { record: row, replayed: false };
   }
 
   async list(input: Parameters<SystemDisruptionRepository['list']>[0]) {
@@ -45,7 +65,7 @@ function makeService() {
   const repository = new FakeSystemDisruptionRepository();
   const events: RecordAuditEventInput[] = [];
   const service = new SystemDisruptionService(repository, {
-    async record(event) {
+    async recordInTransaction(_transaction, event) {
       events.push(event);
       return {} as never;
     },
@@ -59,14 +79,19 @@ describe('SystemDisruptionService', () => {
     const global = await service.create(
       actor,
       { startsAt: start, endsAt: end, reason: '  Gangguan jaringan  ' },
+      KEY_1,
       { clientIp: '127.0.0.1', requestId: '00000000-0000-4000-8000-000000000099' },
     );
-    const scoped = await service.create(actor, {
-      storeId: STORE_ID,
-      startsAt: start,
-      endsAt: end,
-      reason: 'Gangguan perangkat toko',
-    });
+    const scoped = await service.create(
+      actor,
+      {
+        storeId: STORE_ID,
+        startsAt: start,
+        endsAt: end,
+        reason: 'Gangguan perangkat toko',
+      },
+      KEY_2,
+    );
 
     expect(global).toMatchObject({ storeId: null, reason: 'Gangguan jaringan', isActive: true });
     expect(global.startsAt).toBe('2026-10-11T02:00:00.000Z');
@@ -99,6 +124,7 @@ describe('SystemDisruptionService', () => {
       service.create(
         { userAccountId: ADMIN_ID, role: UserRole.EMPLOYEE },
         { startsAt: start, endsAt: end, reason: 'No' },
+        KEY_3,
       ),
     ).rejects.toBeInstanceOf(AppError);
     expect(repository.createInputs).toHaveLength(0);
@@ -111,7 +137,7 @@ describe('SystemDisruptionService', () => {
   ])('rejects %s interval end without writing or auditing', async (_case, startsAt, endsAt) => {
     const { service, repository, events } = makeService();
     await expect(
-      service.create(actor, { startsAt, endsAt, reason: 'Gangguan' }),
+      service.create(actor, { startsAt, endsAt, reason: 'Gangguan' }, KEY_1),
     ).rejects.toMatchObject({ statusCode: 400, code: 'INVALID_SYSTEM_DISRUPTION' });
     expect(repository.createInputs).toHaveLength(0);
     expect(events).toHaveLength(0);
@@ -124,7 +150,7 @@ describe('SystemDisruptionService', () => {
   ])('rejects invalid %s without writing', async (_case, startsAt) => {
     const { service, repository } = makeService();
     await expect(
-      service.create(actor, { startsAt, endsAt: end, reason: 'Gangguan' }),
+      service.create(actor, { startsAt, endsAt: end, reason: 'Gangguan' }, KEY_1),
     ).rejects.toMatchObject({ statusCode: 400, code: 'INVALID_SYSTEM_DISRUPTION' });
     expect(repository.createInputs).toHaveLength(0);
   });
@@ -133,7 +159,7 @@ describe('SystemDisruptionService', () => {
     const { service, repository, events } = makeService();
     for (const reason of ['   ', 'x'.repeat(501)]) {
       await expect(
-        service.create(actor, { startsAt: start, endsAt: end, reason }),
+        service.create(actor, { startsAt: start, endsAt: end, reason }, KEY_1),
       ).rejects.toMatchObject({
         statusCode: 400,
         code: 'INVALID_SYSTEM_DISRUPTION',
@@ -145,18 +171,26 @@ describe('SystemDisruptionService', () => {
 
   it('allows overlapping active records as represented by the schema and lists them separately', async () => {
     const { service } = makeService();
-    const first = await service.create(actor, {
-      storeId: STORE_ID,
-      startsAt: start,
-      endsAt: end,
-      reason: 'Pemadaman pertama',
-    });
-    const second = await service.create(actor, {
-      storeId: STORE_ID,
-      startsAt: '2026-10-11T10:00:00+07:00',
-      endsAt: '2026-10-11T12:00:00+07:00',
-      reason: 'Pemadaman kedua',
-    });
+    const first = await service.create(
+      actor,
+      {
+        storeId: STORE_ID,
+        startsAt: start,
+        endsAt: end,
+        reason: 'Pemadaman pertama',
+      },
+      KEY_1,
+    );
+    const second = await service.create(
+      actor,
+      {
+        storeId: STORE_ID,
+        startsAt: '2026-10-11T10:00:00+07:00',
+        endsAt: '2026-10-11T12:00:00+07:00',
+        reason: 'Pemadaman kedua',
+      },
+      KEY_2,
+    );
     const all = await service.list(actor, { storeId: STORE_ID });
     const otherStore = await service.list(actor, { storeId: OTHER_STORE_ID });
 
@@ -165,15 +199,20 @@ describe('SystemDisruptionService', () => {
     expect(otherStore.items).toEqual([]);
   });
 
-  it('does not claim POST retries are idempotent without a persisted idempotency key', async () => {
+  it('replays the same normalized request and rejects reuse with a different payload', async () => {
     const { service, repository, events } = makeService();
     const input = { storeId: STORE_ID, startsAt: start, endsAt: end, reason: 'Gangguan' };
 
-    const first = await service.create(actor, input);
-    const retry = await service.create(actor, input);
+    const first = await service.create(actor, { ...input, reason: ' Gangguan ' }, KEY_3);
+    const retry = await service.create(actor, input, KEY_3);
 
-    expect(first.id).not.toBe(retry.id);
-    expect(repository.rows).toHaveLength(2);
-    expect(events).toHaveLength(2);
+    expect(first.id).toBe(retry.id);
+    expect(repository.rows).toHaveLength(1);
+    expect(events).toHaveLength(1);
+    await expect(
+      service.create(actor, { ...input, reason: 'Gangguan berbeda' }, KEY_3),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'IDEMPOTENCY_KEY_REUSED' });
+    expect(repository.rows).toHaveLength(1);
+    expect(events).toHaveLength(1);
   });
 });

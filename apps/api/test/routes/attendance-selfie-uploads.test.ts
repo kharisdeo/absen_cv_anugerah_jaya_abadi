@@ -56,6 +56,8 @@ class MemoryIntentRepository implements SelfieUploadIntentRepository {
     objectKey: string;
     contentType: string;
     retentionExpiresAt: Date;
+    watermarkedObjectKey?: string;
+    watermarkApplied?: boolean;
   }> = [];
 
   async createPending(data: CreatePendingSelfieUploadIntentData) {
@@ -82,11 +84,42 @@ class MemoryIntentRepository implements SelfieUploadIntentRepository {
     );
     return selfie
       ? {
-          objectKey: selfie.objectKey,
-          contentType: selfie.contentType,
+          objectKey:
+            selfie.watermarkApplied === false
+              ? selfie.objectKey
+              : (selfie.watermarkedObjectKey ?? selfie.objectKey),
+          contentType: selfie.watermarkApplied === false ? selfie.contentType : 'image/jpeg',
           retentionExpiresAt: selfie.retentionExpiresAt,
+          watermarkApplied: selfie.watermarkApplied ?? true,
         }
       : null;
+  }
+
+  async reserveWatermarkedObjectForAttempt() {
+    return null;
+  }
+
+  async markWatermarkApplied() {
+    return false;
+  }
+
+  async listPendingWatermarkAttempts() {
+    return [];
+  }
+
+  async previewRetentionCandidates() {
+    return {
+      watermarkCandidates: 0,
+      attachedStagingCandidates: 0,
+      expiredAttachedCandidates: 0,
+      expiredPendingCandidates: 0,
+      batchLimitHit: {
+        watermark: false,
+        attachedStaging: false,
+        expiredAttached: false,
+        expiredPending: false,
+      },
+    };
   }
 
   async listAttachedStaging() {
@@ -278,6 +311,8 @@ describe('GET /api/v1/admin/attendance-attempts/:attemptId/selfie-url', () => {
       attemptId,
       objectKey: 'attendance/selfie-accepted/opaque-key',
       contentType: 'image/jpeg',
+      watermarkedObjectKey: 'attendance/selfie-watermarked/opaque-key',
+      watermarkApplied: true,
       retentionExpiresAt: new Date('2099-01-01T00:00:00.000Z'),
     });
     const employeeCookie = await login(app, UserRole.EMPLOYEE);
@@ -303,7 +338,7 @@ describe('GET /api/v1/admin/attendance-attempts/:attemptId/selfie-url', () => {
       expiresAt: expect.any(String),
     });
     expect(storage.createReadUrl).toHaveBeenCalledWith({
-      objectKey: 'attendance/selfie-accepted/opaque-key',
+      objectKey: 'attendance/selfie-watermarked/opaque-key',
       expiresInSeconds: 120,
     });
     expect(storage.createReadUrl).toHaveBeenCalledTimes(1);

@@ -17,6 +17,41 @@ services:
       retries: 12
       start_period: 5s
 
+  rustfs:
+    image: rustfs/rustfs:1.0.4
+    restart: unless-stopped
+    depends_on:
+      rustfs-permissions:
+        condition: service_completed_successfully
+    command: ['/data']
+    environment:
+      RUSTFS_ACCESS_KEY: ${STORAGE_ACCESS_KEY:?Set local STORAGE_ACCESS_KEY in the untracked root .env file}
+      RUSTFS_SECRET_KEY: ${STORAGE_SECRET_KEY:?Set local STORAGE_SECRET_KEY in the untracked root .env file}
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ENABLE: 'false'
+      RUSTFS_CORS_ALLOWED_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+      RUSTFS_OBS_LOGGER_LEVEL: error
+    ports:
+      - '127.0.0.1:9000:9000'
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://127.0.0.1:9000/health >/dev/null || exit 1']
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    volumes:
+      - rustfs_data:/data
+
+  rustfs-permissions:
+    image: alpine:3.22
+    user: '0:0'
+    command: ['sh', '-c', 'chown -R 10001:10001 /data']
+    volumes:
+      - rustfs_data:/data
+    restart: 'no'
+
 volumes:
   postgres_data:
     name: absen_cv_anugerah_jaya_abadi_local_postgres_data
+  rustfs_data:
+    name: absen_cv_anugerah_jaya_abadi_local_rustfs_data

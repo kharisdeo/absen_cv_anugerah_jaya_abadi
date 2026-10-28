@@ -2,12 +2,14 @@ import { API_BASE_URL } from '../config.js';
 import { ApiClientError, apiFetch, readApiErrorDetails, readApiJson } from './api-client.js';
 import {
   API_ATTENDANCE_ATTEMPT_STATES,
+  API_ATTENDANCE_LOCATION_FAILURE_REASONS,
   API_ATTENDANCE_TYPES,
   API_ATTENDANCE_VALIDATION_METHODS,
   API_ATTENDANCE_VALIDATION_STATUSES,
   API_NETWORK_STATUSES,
   isApiDateTime,
   type ApiAttendanceAttemptState,
+  type ApiAttendanceLocationFailureReason,
   type ApiAttendanceValidationMethod,
   type ApiAttendanceValidationStatus,
   type ApiNetworkStatus,
@@ -30,7 +32,8 @@ export type AttendanceAttemptBody = Readonly<{
   type: AttendanceType;
   clientRecordedAt: string;
   networkStatus: ApiNetworkStatus;
-  location: AttendanceLocation;
+  location: AttendanceLocation | null;
+  locationFailureReason?: ApiAttendanceLocationFailureReason;
   validationMethod: ApiAttendanceValidationMethod;
   selfie: Readonly<{ blob: string; sizeKb: number }>;
   liveness: Readonly<{ faceDetected: boolean; passed: boolean }>;
@@ -49,6 +52,7 @@ export type AttendanceReceipt = Readonly<{
   type: AttendanceType;
   receivedAt: string;
   replayed: boolean;
+  locationFailureReason?: ApiAttendanceLocationFailureReason;
   attendanceId?: string;
   validationStatus?: AttendanceValidationStatus;
 }>;
@@ -83,7 +87,8 @@ export type PrepareAttendanceAttemptInput = Readonly<{
   type: AttendanceType;
   clientRecordedAt: string;
   photo: Blob;
-  location: AttendanceLocation;
+  location: AttendanceLocation | null;
+  locationFailureReason?: ApiAttendanceLocationFailureReason;
   liveness: Readonly<{ faceDetected: boolean; passed: boolean }>;
   networkStatus?: ApiNetworkStatus;
   validationMethod?: ApiAttendanceValidationMethod;
@@ -307,6 +312,21 @@ function rounded(value: number, decimalPlaces: number): number {
 }
 
 function validatePreparationInput(input: PrepareAttendanceAttemptInput): void {
+  const validLocationFailureReason =
+    input.locationFailureReason !== undefined &&
+    API_ATTENDANCE_LOCATION_FAILURE_REASONS.includes(input.locationFailureReason);
+  const validLocation = input.location
+    ? Number.isFinite(input.location.latitude) &&
+      input.location.latitude >= -90 &&
+      input.location.latitude <= 90 &&
+      Number.isFinite(input.location.longitude) &&
+      input.location.longitude >= -180 &&
+      input.location.longitude <= 180 &&
+      Number.isFinite(input.location.accuracyMeters) &&
+      input.location.accuracyMeters > 0 &&
+      rounded(input.location.accuracyMeters, 2) > 0 &&
+      input.locationFailureReason === undefined
+    : validLocationFailureReason;
   if (
     !API_ATTENDANCE_TYPES.includes(input.type) ||
     !isIsoInstant(input.clientRecordedAt) ||
@@ -314,14 +334,7 @@ function validatePreparationInput(input: PrepareAttendanceAttemptInput): void {
     input.photo.size < 1 ||
     input.photo.size > MAX_SELFIE_BYTES ||
     !['image/jpeg', 'image/png', 'image/webp'].includes(input.photo.type) ||
-    !Number.isFinite(input.location.latitude) ||
-    input.location.latitude < -90 ||
-    input.location.latitude > 90 ||
-    !Number.isFinite(input.location.longitude) ||
-    input.location.longitude < -180 ||
-    input.location.longitude > 180 ||
-    !Number.isFinite(input.location.accuracyMeters) ||
-    input.location.accuracyMeters <= 0 ||
+    !validLocation ||
     typeof input.liveness.faceDetected !== 'boolean' ||
     typeof input.liveness.passed !== 'boolean' ||
     (input.liveness.passed && !input.liveness.faceDetected) ||
@@ -329,9 +342,6 @@ function validatePreparationInput(input: PrepareAttendanceAttemptInput): void {
     (input.validationMethod !== undefined &&
       !API_ATTENDANCE_VALIDATION_METHODS.includes(input.validationMethod))
   ) {
-    throw new AttendanceSubmissionError(400, 'INVALID_ATTENDANCE_ATTEMPT', 'intent');
-  }
-  if (rounded(input.location.accuracyMeters, 2) <= 0) {
     throw new AttendanceSubmissionError(400, 'INVALID_ATTENDANCE_ATTEMPT', 'intent');
   }
 }
@@ -360,11 +370,14 @@ function createDraft(
     type: input.type,
     clientRecordedAt: input.clientRecordedAt,
     networkStatus: input.networkStatus ?? 'ONLINE',
-    location: Object.freeze({
-      latitude: rounded(input.location.latitude, 6),
-      longitude: rounded(input.location.longitude, 6),
-      accuracyMeters: rounded(input.location.accuracyMeters, 2),
-    }),
+    location: input.location
+      ? Object.freeze({
+          latitude: rounded(input.location.latitude, 6),
+          longitude: rounded(input.location.longitude, 6),
+          accuracyMeters: rounded(input.location.accuracyMeters, 2),
+        })
+      : null,
+    ...(input.locationFailureReason ? { locationFailureReason: input.locationFailureReason } : {}),
     validationMethod: input.validationMethod ?? 'GPS',
     selfie: Object.freeze({ blob: intent.referenceId, sizeKb }),
     liveness: Object.freeze({ ...input.liveness }),
@@ -386,7 +399,12 @@ export async function prepareAttendanceAttempt(
 
 function parseReceipt(value: unknown, expectedType: AttendanceType): AttendanceReceipt {
   const requiredKeys = ['attemptId', 'state', 'type', 'receivedAt', 'replayed'] as const;
-  const allowedKeys = [...requiredKeys, 'attendanceId', 'validationStatus'];
+  const allowedKeys = [
+    ...requiredKeys,
+    'locationFailureReason',
+    'attendanceId',
+    'validationStatus',
+  ];
   if (
     !isRecord(value) ||
     !hasOnlyKeys(value, allowedKeys) ||
@@ -397,6 +415,11 @@ function parseReceipt(value: unknown, expectedType: AttendanceType): AttendanceR
     value.type !== expectedType ||
     !isIsoInstant(value.receivedAt) ||
     typeof value.replayed !== 'boolean' ||
+    (Object.hasOwn(value, 'locationFailureReason') &&
+      (typeof value.locationFailureReason !== 'string' ||
+        !(API_ATTENDANCE_LOCATION_FAILURE_REASONS as readonly string[]).includes(
+          value.locationFailureReason,
+        ))) ||
     (Object.hasOwn(value, 'attendanceId') && !isUuid(value.attendanceId)) ||
     (Object.hasOwn(value, 'validationStatus') &&
       (typeof value.validationStatus !== 'string' ||
@@ -413,6 +436,9 @@ function parseReceipt(value: unknown, expectedType: AttendanceType): AttendanceR
     type: expectedType,
     receivedAt: value.receivedAt,
     replayed: value.replayed,
+    ...(typeof value.locationFailureReason === 'string'
+      ? { locationFailureReason: value.locationFailureReason as ApiAttendanceLocationFailureReason }
+      : {}),
     ...(typeof value.attendanceId === 'string' ? { attendanceId: value.attendanceId } : {}),
     ...(typeof value.validationStatus === 'string'
       ? { validationStatus: value.validationStatus as AttendanceValidationStatus }

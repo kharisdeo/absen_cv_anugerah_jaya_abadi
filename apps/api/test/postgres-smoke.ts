@@ -9,8 +9,8 @@ import {
   EXPECTED_DATABASE_USER,
   SmokeCheckError,
 } from './postgres-smoke-guard.js';
+import { readSignedSessionCookie, SESSION_COOKIE_NAME } from './postgres-smoke-cookie.js';
 const ALLOWED_ORIGIN = 'http://localhost:5173';
-const SESSION_COOKIE_NAME = 'absen_session';
 const LOGIN_FAILURE_LIMIT = 5;
 const POSTGRES_PROBE_TIMEOUT_MS = 15_000;
 // Mirrors LOCK_DURATION_MS in src/modules/auth/service.ts; keep this aligned with production.
@@ -37,41 +37,6 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-}
-
-function readSignedSessionCookie(header: unknown): Readonly<{ cookie: string; token: string }> {
-  const setCookie = Array.isArray(header)
-    ? header.find((value): value is string => typeof value === 'string')
-    : header;
-  requireCheck(typeof setCookie === 'string', 'Login must set the signed session cookie.');
-
-  const lowerCaseHeader = setCookie.toLowerCase();
-  requireCheck(lowerCaseHeader.includes('httponly'), 'Session cookie must be HttpOnly.');
-  requireCheck(
-    /;\s*samesite=strict(?:;|$)/i.test(setCookie),
-    'Session cookie must use SameSite=Strict.',
-  );
-  requireCheck(/;\s*path=\/(?:;|$)/i.test(setCookie), 'Session cookie must use Path=/.');
-
-  const cookie = setCookie.split(';', 1)[0] ?? '';
-  const cookiePrefix = `${SESSION_COOKIE_NAME}=`;
-  requireCheck(cookie.startsWith(cookiePrefix), 'Login must set the expected session cookie.');
-  let signedValue: string;
-  try {
-    signedValue = decodeURIComponent(cookie.slice(cookiePrefix.length));
-  } catch {
-    throw new SmokeCheckError('Session cookie must contain a valid signed value.');
-  }
-  requireCheck(signedValue.startsWith('s:'), 'Session cookie must be signed.');
-
-  const signatureSeparator = signedValue.lastIndexOf('.');
-  requireCheck(
-    signatureSeparator > 2 && signatureSeparator < signedValue.length - 1,
-    'Session cookie must contain a signed token.',
-  );
-  const token = signedValue.slice(2, signatureSeparator);
-  requireCheck(token.length > 0, 'Session cookie must contain a signed token.');
-  return { cookie, token };
 }
 
 function assertPublicAuthResponse(
@@ -1099,7 +1064,10 @@ async function runPostgresSmoke(databaseUrl: string): Promise<void> {
         deviceName: 'CI smoke synthetic device ' + fixtureId,
       },
     });
-    requireCheck(login.statusCode === 200, 'Synthetic Employee login must return HTTP 200.');
+    requireCheck(
+      login.statusCode === 200,
+      `Synthetic Employee login must return HTTP 200 (received ${login.statusCode}).`,
+    );
     assertPublicAuthResponse(
       login.json(),
       { id: employeeAccountId, username: employeeUsername },
@@ -1114,7 +1082,11 @@ async function runPostgresSmoke(databaseUrl: string): Promise<void> {
         employeeLoginBody.user.deviceBindingStatus === 'APPROVED',
       'The authenticated account must be the active synthetic Employee with its approved device binding.',
     );
-    const employeeSessionCookie = readSignedSessionCookie(login.headers['set-cookie']);
+    const employeeSessionCookie = readSignedSessionCookie(
+      login.headers['set-cookie'],
+      app!,
+      requireCheck,
+    );
     const employeeSessions = await prisma.session.findMany({
       where: { userAccountId: employeeAccountId },
       select: { deviceBindingId: true, revokedAt: true },
@@ -1667,7 +1639,7 @@ async function runPostgresSmoke(databaseUrl: string): Promise<void> {
       login.headers['cache-control'] === 'no-store',
       'POST /api/v1/auth/login must include Cache-Control: no-store.',
     );
-    const sessionCookie = readSignedSessionCookie(login.headers['set-cookie']);
+    const sessionCookie = readSignedSessionCookie(login.headers['set-cookie'], app, requireCheck);
     assertPublicAuthResponse(login.json(), { id: fixtureAccountId, username: fixtureUsername });
     requireCheck(
       !login.body.includes(fixturePassword) && !login.body.includes(sessionCookie.token),
@@ -1685,6 +1657,24 @@ async function runPostgresSmoke(databaseUrl: string): Promise<void> {
       'GET /api/v1/auth/me must include Cache-Control: no-store.',
     );
     assertPublicAuthResponse(me.json(), { id: fixtureAccountId, username: fixtureUsername });
+
+    const signedCookieValue = app.parseCookie(sessionCookie.cookie)[SESSION_COOKIE_NAME];
+    requireCheck(
+      typeof signedCookieValue === 'string' && signedCookieValue.length > 0,
+      'Login must provide a parseable signed session cookie value.',
+    );
+    const tamperedCookieValue = `${signedCookieValue[0] === 'A' ? 'B' : 'A'}${signedCookieValue.slice(1)}`;
+    const tamperedMe = await app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/me',
+      headers: {
+        cookie: `${SESSION_COOKIE_NAME}=${encodeURIComponent(tamperedCookieValue)}`,
+      },
+    });
+    requireCheck(
+      tamperedMe.statusCode === 401,
+      'GET /api/v1/auth/me must reject a tampered signed session cookie.',
+    );
 
     const sessions = await prisma.session.findMany({
       where: { userAccountId: fixtureAccountId },
@@ -1949,7 +1939,11 @@ async function runPostgresSmoke(databaseUrl: string): Promise<void> {
       recoveredLogin.headers['cache-control'] === 'no-store',
       'A recovered login must include Cache-Control: no-store.',
     );
-    const recoveredSessionCookie = readSignedSessionCookie(recoveredLogin.headers['set-cookie']);
+    const recoveredSessionCookie = readSignedSessionCookie(
+      recoveredLogin.headers['set-cookie'],
+      app,
+      requireCheck,
+    );
     assertPublicAuthResponse(recoveredLogin.json(), {
       id: lockoutFixtureAccountId,
       username: lockoutFixtureUsername,

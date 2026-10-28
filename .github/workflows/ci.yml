@@ -81,5 +81,8 @@ jobs:
       - name: Apply migrations to the ephemeral database
         run: pnpm --filter @absen/api db:migrate:deploy
 
+      - name: Verify employee dashboard ownership against PostgreSQL
+        run: pnpm --filter @absen/api test:postgres-dashboard
+
       - name: Run PostgreSQL-backed auth/session integration smoke
         run: pnpm --filter @absen/api test:postgres

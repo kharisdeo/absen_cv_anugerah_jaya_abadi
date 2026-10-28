@@ -4,6 +4,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['test/**/*.test.ts'],
+    pool: 'threads',
+    maxWorkers: 2,
     restoreMocks: true,
   },
 });

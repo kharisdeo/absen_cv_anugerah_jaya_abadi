@@ -145,6 +145,8 @@ describe('PrismaSelfieUploadIntentRepository', () => {
     const { repository, intent } = setup({
       findFirst: vi.fn(async () => ({
         objectKey: 'attendance/selfie-accepted/key',
+        watermarkedObjectKey: 'attendance/selfie-watermarked/key',
+        watermarkApplied: true,
         contentType: 'image/jpeg',
         retentionExpiresAt: new Date(NOW.getTime() + 10_000),
       })),
@@ -155,9 +157,10 @@ describe('PrismaSelfieUploadIntentRepository', () => {
     });
 
     expect(result).toEqual({
-      objectKey: 'attendance/selfie-accepted/key',
+      objectKey: 'attendance/selfie-watermarked/key',
       contentType: 'image/jpeg',
       retentionExpiresAt: new Date(NOW.getTime() + 10_000),
+      watermarkApplied: true,
     });
     expect(intent.findFirst).toHaveBeenCalledWith({
       where: {
@@ -167,8 +170,191 @@ describe('PrismaSelfieUploadIntentRepository', () => {
         deletedAt: null,
         retentionExpiresAt: { gt: NOW },
       },
-      select: { objectKey: true, contentType: true, retentionExpiresAt: true },
+      select: {
+        objectKey: true,
+        watermarkedObjectKey: true,
+        watermarkApplied: true,
+        contentType: true,
+        retentionExpiresAt: true,
+      },
     });
+  });
+
+  it('reserves one immutable derivative key and returns only the DB-bound source metadata', async () => {
+    const row = {
+      referenceHash: REFERENCE_HASH,
+      objectKey: 'attendance/selfie-accepted/original',
+      watermarkedObjectKey: null,
+      watermarkApplied: false,
+      contentType: 'image/jpeg',
+      declaredSizeBytes: 12_345,
+      retentionExpiresAt: new Date(NOW.getTime() + 60_000),
+      watermarkMetadata: { employeeName: 'Karyawan Uji', serverTime: NOW.toISOString() },
+    };
+    const { repository, intent, transaction } = setup({
+      findFirst: vi
+        .fn()
+        .mockResolvedValueOnce(row)
+        .mockResolvedValueOnce({
+          ...row,
+          watermarkedObjectKey: 'attendance/selfie-watermarked/reserved',
+        }),
+    });
+
+    await expect(
+      repository.reserveWatermarkedObjectForAttempt({
+        attemptId: ATTEMPT_ID,
+        candidateObjectKey: 'attendance/selfie-watermarked/candidate',
+        now: NOW,
+      }),
+    ).resolves.toEqual({
+      referenceHash: REFERENCE_HASH,
+      objectKey: 'attendance/selfie-accepted/original',
+      watermarkedObjectKey: 'attendance/selfie-watermarked/reserved',
+      watermarkApplied: false,
+      contentType: 'image/jpeg',
+      sizeBytes: 12_345,
+      retentionExpiresAt: new Date(NOW.getTime() + 60_000),
+      watermarkMetadata: row.watermarkMetadata,
+    });
+    expect(transaction.selfieUploadIntent.updateMany).toHaveBeenCalledWith({
+      where: {
+        referenceHash: REFERENCE_HASH,
+        attachedAttemptId: ATTEMPT_ID,
+        objectKey: row.objectKey,
+        watermarkedObjectKey: null,
+        watermarkApplied: false,
+        deletedAt: null,
+        retentionExpiresAt: { gt: NOW },
+      },
+      data: { watermarkedObjectKey: 'attendance/selfie-watermarked/candidate' },
+    });
+    expect(intent.findFirst).toHaveBeenCalledTimes(2);
+  });
+
+  it('commits watermark state and capture flag only after the derivative exists', async () => {
+    const { repository, transaction, selfieCapture } = setup();
+
+    await expect(
+      repository.markWatermarkApplied({
+        attemptId: ATTEMPT_ID,
+        referenceHash: REFERENCE_HASH,
+        originalObjectKey: 'attendance/selfie-accepted/original',
+        watermarkedObjectKey: 'attendance/selfie-watermarked/ready',
+        sizeBytes: 10_000,
+        now: NOW,
+      }),
+    ).resolves.toBe(true);
+    expect(transaction.selfieUploadIntent.updateMany).toHaveBeenCalledWith({
+      where: {
+        referenceHash: REFERENCE_HASH,
+        attachedAttemptId: ATTEMPT_ID,
+        status: 'ATTACHED',
+        objectKey: 'attendance/selfie-accepted/original',
+        watermarkedObjectKey: 'attendance/selfie-watermarked/ready',
+        watermarkApplied: false,
+        deletedAt: null,
+        retentionExpiresAt: { gt: NOW },
+      },
+      data: { watermarkApplied: true, watermarkedSizeBytes: 10_000 },
+    });
+    expect(selfieCapture.updateMany).toHaveBeenCalledWith({
+      where: {
+        objectKey: 'attendance/selfie-accepted/original',
+        deletedAt: null,
+        retentionExpiresAt: { gt: NOW },
+        attendance: { is: { sourceAttemptId: ATTEMPT_ID } },
+      },
+      data: { watermarkApplied: true },
+    });
+  });
+
+  it('selects only retained attached attempts whose watermark has not been applied', async () => {
+    const { repository, intent } = setup({
+      findMany: vi.fn(async () => [{ attachedAttemptId: ATTEMPT_ID }]),
+    });
+
+    await expect(repository.listPendingWatermarkAttempts({ now: NOW, take: 20 })).resolves.toEqual([
+      ATTEMPT_ID,
+    ]);
+    expect(intent.findMany).toHaveBeenCalledWith({
+      where: {
+        status: 'ATTACHED',
+        attachedAttemptId: { not: null },
+        objectKey: { not: null },
+        watermarkApplied: false,
+        deletedAt: null,
+        retentionExpiresAt: { gt: NOW },
+      },
+      orderBy: [{ createdAt: 'asc' }, { referenceHash: 'asc' }],
+      take: 20,
+      select: { attachedAttemptId: true },
+    });
+  });
+
+  it('previews only bounded candidate counts with read queries and no database mutation', async () => {
+    const { repository, prisma, intent, selfieCapture } = setup({
+      findMany: vi.fn(async () => [{ referenceHash: REFERENCE_HASH }]),
+    });
+
+    await expect(repository.previewRetentionCandidates({ now: NOW, take: 10 })).resolves.toEqual({
+      watermarkCandidates: 1,
+      attachedStagingCandidates: 1,
+      expiredAttachedCandidates: 1,
+      expiredPendingCandidates: 1,
+      batchLimitHit: {
+        watermark: false,
+        attachedStaging: false,
+        expiredAttached: false,
+        expiredPending: false,
+      },
+    });
+    expect(intent.findMany.mock.calls).toHaveLength(4);
+    expect(intent.findMany).toHaveBeenNthCalledWith(1, {
+      where: {
+        status: 'ATTACHED',
+        attachedAttemptId: { not: null },
+        objectKey: { not: null },
+        watermarkApplied: false,
+        deletedAt: null,
+        retentionExpiresAt: { gt: NOW },
+      },
+      orderBy: [{ createdAt: 'asc' }, { referenceHash: 'asc' }],
+      take: 10,
+      select: { attachedAttemptId: true },
+    });
+    expect(intent.findMany).toHaveBeenNthCalledWith(2, {
+      where: { status: 'ATTACHED', stagingObjectKey: { not: null } },
+      orderBy: [{ createdAt: 'asc' }, { referenceHash: 'asc' }],
+      take: 10,
+      select: { referenceHash: true },
+    });
+    expect(intent.findMany).toHaveBeenNthCalledWith(3, {
+      where: {
+        status: 'ATTACHED',
+        objectKey: { not: null },
+        deletedAt: null,
+        retentionExpiresAt: { lte: NOW },
+      },
+      orderBy: [{ retentionExpiresAt: 'asc' }, { referenceHash: 'asc' }],
+      take: 10,
+      select: { referenceHash: true },
+    });
+    expect(intent.findMany).toHaveBeenNthCalledWith(4, {
+      where: {
+        status: 'PENDING',
+        objectKey: { not: null },
+        sealedObjectKey: { not: null },
+        expiresAt: { lte: NOW },
+      },
+      orderBy: [{ expiresAt: 'asc' }, { referenceHash: 'asc' }],
+      take: 10,
+      select: { referenceHash: true },
+    });
+    expect(intent.updateMany.mock.calls).toHaveLength(0);
+    expect(intent.deleteMany.mock.calls).toHaveLength(0);
+    expect(selfieCapture.updateMany.mock.calls).toHaveLength(0);
+    expect(prisma.$transaction.mock.calls).toHaveLength(0);
   });
 
   it('atomically clears expired selfie references while preserving attendance and audit rows', async () => {
@@ -186,6 +372,7 @@ describe('PrismaSelfieUploadIntentRepository', () => {
         {
           referenceHash: REFERENCE_HASH,
           objectKey: 'attendance/selfie-accepted/expired',
+          watermarkedObjectKey: 'attendance/selfie-watermarked/expired',
           attachedAttemptId: ATTEMPT_ID,
         },
       ]),
@@ -195,6 +382,7 @@ describe('PrismaSelfieUploadIntentRepository', () => {
       {
         referenceHash: REFERENCE_HASH,
         objectKey: 'attendance/selfie-accepted/expired',
+        watermarkedObjectKey: 'attendance/selfie-watermarked/expired',
         attachedAttemptId: ATTEMPT_ID,
       },
     ]);
@@ -207,13 +395,19 @@ describe('PrismaSelfieUploadIntentRepository', () => {
       },
       orderBy: [{ retentionExpiresAt: 'asc' }, { referenceHash: 'asc' }],
       take: 100,
-      select: { referenceHash: true, objectKey: true, attachedAttemptId: true },
+      select: {
+        referenceHash: true,
+        objectKey: true,
+        watermarkedObjectKey: true,
+        attachedAttemptId: true,
+      },
     });
 
     await expect(
       repository.markAttachedObjectPurged({
         referenceHash: REFERENCE_HASH,
         objectKey: 'attendance/selfie-accepted/expired',
+        watermarkedObjectKey: 'attendance/selfie-watermarked/expired',
         attachedAttemptId: ATTEMPT_ID,
         deletedAt: NOW,
       }),
@@ -225,11 +419,18 @@ describe('PrismaSelfieUploadIntentRepository', () => {
         referenceHash: REFERENCE_HASH,
         status: 'ATTACHED',
         objectKey: 'attendance/selfie-accepted/expired',
+        watermarkedObjectKey: 'attendance/selfie-watermarked/expired',
         attachedAttemptId: ATTEMPT_ID,
         deletedAt: null,
         retentionExpiresAt: { lte: NOW },
       },
-      data: { objectKey: null, deletedAt: NOW },
+      data: {
+        objectKey: null,
+        watermarkedObjectKey: null,
+        watermarkedSizeBytes: null,
+        watermarkApplied: false,
+        deletedAt: NOW,
+      },
     });
     expect(selfieCapture.updateMany).toHaveBeenCalledWith({
       where: {
@@ -255,6 +456,7 @@ describe('PrismaSelfieUploadIntentRepository', () => {
       repository.markAttachedObjectPurged({
         referenceHash: REFERENCE_HASH,
         objectKey: 'attendance/selfie-accepted/racing',
+        watermarkedObjectKey: null,
         attachedAttemptId: ATTEMPT_ID,
         deletedAt: NOW,
       }),
@@ -297,6 +499,7 @@ describe('PrismaSelfieUploadIntentRepository', () => {
                 {
                   referenceHash: REFERENCE_HASH,
                   objectKey: state.intentObjectKey,
+                  watermarkedObjectKey: null,
                   attachedAttemptId: ATTEMPT_ID,
                 },
               ]
@@ -331,6 +534,7 @@ describe('PrismaSelfieUploadIntentRepository', () => {
       repository.markAttachedObjectPurged({
         referenceHash: REFERENCE_HASH,
         objectKey,
+        watermarkedObjectKey: null,
         attachedAttemptId: ATTEMPT_ID,
         deletedAt: NOW,
       }),
@@ -346,6 +550,7 @@ describe('PrismaSelfieUploadIntentRepository', () => {
       {
         referenceHash: REFERENCE_HASH,
         objectKey: 'attendance/selfie-accepted/rollback',
+        watermarkedObjectKey: null,
         attachedAttemptId: ATTEMPT_ID,
       },
     ]);
@@ -367,6 +572,7 @@ describe('PrismaSelfieUploadIntentRepository', () => {
       repository.markAttachedObjectPurged({
         referenceHash: REFERENCE_HASH,
         objectKey: 'attendance/selfie-accepted/rollback',
+        watermarkedObjectKey: null,
         attachedAttemptId: ATTEMPT_ID,
         deletedAt: NOW,
       }),
@@ -388,6 +594,7 @@ describe('PrismaSelfieUploadIntentRepository', () => {
       repository.markAttachedObjectPurged({
         referenceHash: REFERENCE_HASH,
         objectKey: 'attendance/selfie-accepted/transactional',
+        watermarkedObjectKey: null,
         attachedAttemptId: ATTEMPT_ID,
         deletedAt: NOW,
       }),

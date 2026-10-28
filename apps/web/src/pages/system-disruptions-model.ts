@@ -43,6 +43,12 @@ export type SystemDisruptionsSnapshot = Readonly<{
 type SystemDisruptionsClient = Pick<typeof systemDisruptionsApi, 'list' | 'create'>;
 type StoresClient = Pick<typeof adminStoresApi, 'listStores'>;
 
+type PendingSubmission = Readonly<{
+  input: SystemDisruptionCreateInput;
+  fingerprint: string;
+  idempotencyKey: string;
+}>;
+
 const INITIAL_SNAPSHOT: SystemDisruptionsSnapshot = {
   status: 'loading',
   storesStatus: 'loading',
@@ -135,6 +141,7 @@ export class SystemDisruptionsModel {
   private listVersion = 0;
   private storesVersion = 0;
   private createInFlight = false;
+  private pendingSubmission: PendingSubmission | null = null;
   private readonly client: SystemDisruptionsClient;
   private readonly storesClient: StoresClient;
 
@@ -245,6 +252,31 @@ export class SystemDisruptionsModel {
 
   async create(input: SystemDisruptionCreateInput): Promise<boolean> {
     if (this.createInFlight || !canSubmitSystemDisruption(this.snapshot)) return false;
+    const normalizedInput = normalizeCreateInput(input);
+    const fingerprint = JSON.stringify(normalizedInput);
+    const idempotencyKey =
+      this.pendingSubmission?.fingerprint === fingerprint
+        ? this.pendingSubmission.idempotencyKey
+        : globalThis.crypto.randomUUID();
+    this.pendingSubmission = { input: normalizedInput, fingerprint, idempotencyKey };
+    return this.submit(normalizedInput, idempotencyKey);
+  }
+
+  async retryUncertainCreate(): Promise<boolean> {
+    if (
+      this.createInFlight ||
+      !this.snapshot.submissionOutcomeUncertain ||
+      this.pendingSubmission === null
+    ) {
+      return false;
+    }
+    return this.submit(this.pendingSubmission.input, this.pendingSubmission.idempotencyKey);
+  }
+
+  private async submit(
+    input: SystemDisruptionCreateInput,
+    idempotencyKey: string,
+  ): Promise<boolean> {
     this.createInFlight = true;
     this.update({
       ...this.snapshot,
@@ -253,8 +285,9 @@ export class SystemDisruptionsModel {
       createNotice: null,
     });
     try {
-      await this.client.create(input);
+      await this.client.create(input, idempotencyKey);
       this.createInFlight = false;
+      this.pendingSubmission = null;
       this.update({
         ...this.snapshot,
         submitting: false,
@@ -269,6 +302,7 @@ export class SystemDisruptionsModel {
     } catch (error: unknown) {
       this.createInFlight = false;
       const outcomeUncertain = isAmbiguousDisruptionCreateOutcome(error);
+      if (!outcomeUncertain) this.pendingSubmission = null;
       this.update({
         ...this.snapshot,
         submitting: false,
@@ -279,4 +313,13 @@ export class SystemDisruptionsModel {
       return false;
     }
   }
+}
+
+function normalizeCreateInput(input: SystemDisruptionCreateInput): SystemDisruptionCreateInput {
+  return {
+    storeId: input.storeId?.toLowerCase() ?? null,
+    startsAt: new Date(input.startsAt).toISOString(),
+    endsAt: new Date(input.endsAt).toISOString(),
+    reason: input.reason.trim(),
+  };
 }

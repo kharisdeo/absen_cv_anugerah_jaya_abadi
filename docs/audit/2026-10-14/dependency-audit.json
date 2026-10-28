@@ -1,0 +1,39 @@
+{
+  "advisories": {
+    "1119441": {
+      "findings": [
+        {
+          "version": "8.3.2",
+          "paths": [
+            "apps__api>exceljs>uuid"
+          ],
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        }
+      ],
+      "id": 1119441,
+      "title": "uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided",
+      "module_name": "uuid",
+      "vulnerable_versions": "<11.1.1",
+      "patched_versions": ">=11.1.1",
+      "severity": "moderate",
+      "cwe": "CWE-787, CWE-1285",
+      "github_advisory_id": "GHSA-w5hq-g745-h8pq",
+      "url": "https://github.com/advisories/GHSA-w5hq-g745-h8pq"
+    }
+  },
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 1,
+      "high": 0,
+      "critical": 0
+    },
+    "dependencies": 413,
+    "devDependencies": 415,
+    "optionalDependencies": 80,
+    "totalDependencies": 829
+  }
+}

@@ -27,6 +27,14 @@ export type ApiAttendanceValidationMethod = (typeof API_ATTENDANCE_VALIDATION_ME
 export const API_NETWORK_STATUSES = ['ONLINE', 'OFFLINE'] as const;
 export type ApiNetworkStatus = (typeof API_NETWORK_STATUSES)[number];
 
+export const API_ATTENDANCE_LOCATION_FAILURE_REASONS = [
+  'PERMISSION_DENIED',
+  'POSITION_UNAVAILABLE',
+  'TIMEOUT',
+] as const;
+export type ApiAttendanceLocationFailureReason =
+  (typeof API_ATTENDANCE_LOCATION_FAILURE_REASONS)[number];
+
 export const API_REQUEST_TYPES = ['LEAVE', 'SICK', 'ANNUAL_LEAVE', 'OVERTIME'] as const;
 export type ApiRequestType = (typeof API_REQUEST_TYPES)[number];
 

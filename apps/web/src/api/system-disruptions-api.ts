@@ -44,6 +44,8 @@ export class SystemDisruptionsApiError extends ApiClientError {
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const IDEMPOTENCY_KEY_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DTO_KEYS = [
   'id',
   'storeId',
@@ -158,6 +160,13 @@ function validateCreateInput(input: SystemDisruptionCreateInput): SystemDisrupti
   return input;
 }
 
+function validateIdempotencyKey(value: unknown): string {
+  if (typeof value !== 'string' || !IDEMPOTENCY_KEY_PATTERN.test(value)) {
+    throw new TypeError('Kunci idempotency harus berupa UUID v4 acak.');
+  }
+  return value.toLowerCase();
+}
+
 async function readJson(response: Response, expectedStatus: number): Promise<unknown> {
   return readApiJson(
     response,
@@ -184,11 +193,19 @@ export const systemDisruptionsApi = {
     return parsePage(await readJson(response, 200), query);
   },
 
-  async create(input: SystemDisruptionCreateInput): Promise<SystemDisruptionDto> {
+  async create(
+    input: SystemDisruptionCreateInput,
+    idempotencyKey: string,
+  ): Promise<SystemDisruptionDto> {
     const body = validateCreateInput(input);
+    const key = validateIdempotencyKey(idempotencyKey);
     const response = await apiFetch(path, {
       method: 'POST',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'Idempotency-Key': key,
+      },
       body: JSON.stringify(body),
     });
     return parseDisruption(await readJson(response, 201));

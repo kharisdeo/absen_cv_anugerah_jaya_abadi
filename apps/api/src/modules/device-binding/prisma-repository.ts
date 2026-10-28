@@ -45,7 +45,15 @@ export async function acquireDeviceBindingEmployeeLock(
   employeeId: string,
 ): Promise<void> {
   await tx.$queryRaw(
-    Prisma.sql`SELECT pg_advisory_xact_lock(hashtext('device_binding_employee'), hashtext(${employeeId}))`,
+    Prisma.sql`
+      WITH device_binding_lock AS MATERIALIZED (
+        SELECT pg_advisory_xact_lock(
+          hashtext('device_binding_employee'),
+          hashtext(${employeeId})
+        )
+      )
+      SELECT TRUE AS locked FROM device_binding_lock
+    `,
   );
 }
 

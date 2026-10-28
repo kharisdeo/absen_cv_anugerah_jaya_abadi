@@ -1,0 +1,51 @@
+$ pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build
+$ prettier --check "apps/**/*.{ts,tsx,json,css,html}" "*.{json,js,mjs,yml}" compose.yaml pnpm-workspace.yaml README.md docs/DECISIONS.md docs/API.md docs/TODO-implementation-plan.md docs/openapi.yaml
+Checking formatting...
+All matched files use Prettier code style!
+$ eslint .
+$ pnpm --recursive --if-present typecheck
+Scope: 2 of 3 workspace projects
+apps/web typecheck$ tsc --noEmit -p tsconfig.json
+apps/api typecheck$ tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.seed.json
+apps/web typecheck: Done
+apps/api typecheck: Done
+$ pnpm --recursive --if-present test
+Scope: 2 of 3 workspace projects
+apps/api test$ vitest run --config vitest.config.ts
+apps/web test$ vitest run
+apps/api test:  RUN  v5.0.3 C:/Users/khari/Downloads/absen_cv_anugerah_jaya_abadi/apps/api
+apps/web test:  RUN  v5.0.3 C:/Users/khari/Downloads/absen_cv_anugerah_jaya_abadi/apps/web
+apps/web test:  Test Files  77 passed (77)
+apps/web test:       Tests  406 passed (406)
+apps/web test:    Start at  23:28:03
+apps/web test:    Duration  29.29s (environment 74%, tests 14%, import 7%, transform 5%)
+apps/web test:     Isolate  77 workers spawned · ~3.19s startup each (spawn + environment, per file)
+apps/web test:              at least ~19.13s faster with isolate: false — reuses workers across files instead of one per file
+apps/web test: Done
+apps/api test:  ❯ test/modules/monthly-report-xlsx.test.ts (1 test | 1 failed) 35093ms
+apps/api test:    ❯ monthly report XLSX (1)
+apps/api test:      × round-trips two worksheets with summary parity, WIB times and literal untrusted text 35088ms
+apps/api test: ⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+apps/api test:  FAIL  test/modules/monthly-report-xlsx.test.ts > monthly report XLSX > round-trips two worksheets with summary parity, WIB times and literal untrusted text
+apps/api test: Error: Test timed out in 5000ms.
+apps/api test: If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+apps/api test:  ❯ test/modules/monthly-report-xlsx.test.ts:12:3
+apps/api test:      10|
+apps/api test:      11| describe('monthly report XLSX', () => {
+apps/api test:      12|   it('round-trips two worksheets with summary parity, WIB times and li…
+apps/api test:        |   ^
+apps/api test:      13|     const rows: MonthlyReportRepositoryRow[] = [
+apps/api test:      14|       {
+apps/api test: ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+apps/api test:  Test Files  1 failed | 57 passed (58)
+apps/api test:       Tests  1 failed | 513 passed (514)
+apps/api test:    Start at  23:28:03
+apps/api test:    Duration  37.30s (tests 49%, import 32%, transform 19%)
+apps/api test:     Isolate  58 workers spawned · ~590ms startup each (spawn + environment, per file)
+apps/api test:              at least ~2.52s faster with isolate: false — reuses workers across files instead of one per file
+apps/api test: Failed
+C:\Users\khari\Downloads\absen_cv_anugerah_jaya_abadi\apps\api:
+[ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL] @absen/api@0.1.0 test: `vitest run --config vitest.config.ts`
+Exit status 1
+[ELIFECYCLE] Test failed. See above for more details.
+[ELIFECYCLE] Command failed with exit code 1.

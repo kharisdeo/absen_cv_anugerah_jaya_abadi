@@ -110,10 +110,13 @@ class RouteMemoryRepository implements AttendanceAttemptRepository {
       requestFingerprint: data.requestFingerprint,
       deviceIdHash: 'server-derived-device-hash',
       receivedAt: new Date('2026-10-11T03:00:00.000Z'),
-      processingStatus: 'RECORDED',
+      processingStatus: data.locationFailureReason ? 'RECEIVED' : 'RECORDED',
       processingErrorCode: null,
-      attendanceId: `00000000-0000-4000-8000-${String(19 + recordNumber).padStart(12, '0')}`,
-      attendanceValidationStatus: 'PENDING_VERIFICATION',
+      locationFailureReason: data.locationFailureReason,
+      attendanceId: data.locationFailureReason
+        ? null
+        : `00000000-0000-4000-8000-${String(19 + recordNumber).padStart(12, '0')}`,
+      attendanceValidationStatus: data.locationFailureReason ? null : 'PENDING_VERIFICATION',
     };
     this.records.push(record);
     return { record, created: true } as const;
@@ -332,6 +335,40 @@ describe('POST /api/v1/attendance/attempts', () => {
     expect(repository.records).toHaveLength(1);
     expect(repository.creates).toHaveLength(1);
     expect(repository.creates[0]?.networkStatus).toBe('OFFLINE');
+  });
+
+  it('returns an owner-scoped RECEIVED receipt for a no-fix location attempt', async () => {
+    const { app, repository } = await makeHarness();
+    const ownerCookie = await login(app, UserRole.EMPLOYEE);
+    const noFixBody = {
+      ...requestBody(),
+      location: null,
+      locationFailureReason: 'POSITION_UNAVAILABLE',
+    };
+
+    const first = await postAttempt(app, ownerCookie, noFixBody);
+    const replay = await postAttempt(app, ownerCookie, noFixBody);
+    const otherEmployeeCookie = await login(app, 'employee-2');
+    const isolated = await postAttempt(app, otherEmployeeCookie, noFixBody);
+
+    expect(first.statusCode).toBe(202);
+    expect(first.json()).toMatchObject({
+      state: 'RECEIVED',
+      locationFailureReason: 'POSITION_UNAVAILABLE',
+      replayed: false,
+    });
+    expect(first.json()).not.toHaveProperty('attendanceId');
+    expect(first.json()).not.toHaveProperty('validationStatus');
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toEqual({ ...first.json(), replayed: true });
+    expect(isolated.statusCode).toBe(202);
+    expect(isolated.json()).toMatchObject({ replayed: false, state: 'RECEIVED' });
+    expect(isolated.json().attemptId).not.toBe(first.json().attemptId);
+    expect(repository.records).toHaveLength(2);
+    expect(repository.records.map((record) => record.employeeId)).toEqual([
+      EMPLOYEE_ID,
+      SECOND_EMPLOYEE_ID,
+    ]);
   });
 
   it('rejects reuse of an offline idempotency key with a different payload', async () => {

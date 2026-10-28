@@ -103,37 +103,52 @@ describe('system disruption form and model', () => {
     expect(model.getSnapshot().createNotice).toContain('berhasil dicatat');
   });
 
-  it('keeps an ambiguous POST fail-closed even after page one and remaining pages are reviewed', async () => {
+  it('requires same-key resolution before accepting a different payload after unknown outcome', async () => {
     const networkError = Object.assign(new Error('network timeout'), {
       status: 0,
       code: 'NETWORK_ERROR',
     });
-    const create = vi.fn().mockRejectedValueOnce(networkError);
-    const firstPage: SystemDisruptionPage = { ...emptyPage, hasNextPage: true };
-    const secondPage: SystemDisruptionPage = { ...emptyPage, page: 2 };
-    const list = vi.fn().mockResolvedValueOnce(firstPage).mockResolvedValueOnce(secondPage);
+    const create = vi
+      .fn()
+      .mockRejectedValueOnce(networkError)
+      .mockResolvedValueOnce(disruption)
+      .mockResolvedValueOnce(disruption);
     const model = new SystemDisruptionsModel(
-      { list, create },
+      { list: vi.fn().mockResolvedValue(emptyPage), create },
       { listStores: vi.fn().mockResolvedValue([store()]) },
     );
 
     await expect(model.create(input)).resolves.toBe(false);
     expect(model.getSnapshot().submissionOutcomeUncertain).toBe(true);
     expect(canSubmitSystemDisruption(model.getSnapshot())).toBe(false);
-    await expect(model.create(input)).resolves.toBe(false);
+    const firstKey = create.mock.calls[0]?.[1];
+    expect(firstKey).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+
+    const changedInput = { ...input, reason: 'Gangguan koneksi alternatif' };
+    await expect(model.create(changedInput)).resolves.toBe(false);
     expect(create).toHaveBeenCalledTimes(1);
 
-    model.reviewUncertainOutcome();
-    expect(model.getSnapshot().storeFilter).toBe('all');
-    expect(await model.load()).toBe(true);
-    expect(model.getSnapshot()).toMatchObject({ page: 1, hasNextPage: true });
-    expect(canSubmitSystemDisruption(model.getSnapshot())).toBe(false);
-    model.goToPage(2);
-    expect(await model.load()).toBe(true);
-    expect(model.getSnapshot()).toMatchObject({ page: 2, hasNextPage: false });
-    expect(canSubmitSystemDisruption(model.getSnapshot())).toBe(false);
-    await expect(model.create(input)).resolves.toBe(false);
-    expect(create).toHaveBeenCalledTimes(1);
+    await expect(model.retryUncertainCreate()).resolves.toBe(true);
+    expect(create.mock.calls[1]?.[0]).toEqual({
+      storeId: null,
+      startsAt: '2026-10-11T02:00:00.000Z',
+      endsAt: '2026-10-11T04:00:00.000Z',
+      reason: input.reason,
+    });
+    expect(create.mock.calls[1]?.[1]).toBe(firstKey);
+    expect(model.getSnapshot().submissionOutcomeUncertain).toBe(false);
+
+    await expect(model.create(changedInput)).resolves.toBe(true);
+    expect(create.mock.calls[2]?.[0]).toMatchObject({
+      startsAt: '2026-10-11T02:00:00.000Z',
+      endsAt: '2026-10-11T04:00:00.000Z',
+      reason: changedInput.reason,
+    });
+    expect(create.mock.calls[2]?.[1]).not.toBe(firstKey);
+    expect(model.getSnapshot().submissionOutcomeUncertain).toBe(false);
+    expect(canSubmitSystemDisruption(model.getSnapshot())).toBe(true);
   });
 
   it('treats definite 4xx rejections as not stored instead of requiring timeout verification', async () => {
@@ -150,6 +165,25 @@ describe('system disruption form and model', () => {
     await expect(model.create(input)).resolves.toBe(false);
     expect(model.getSnapshot().submissionOutcomeUncertain).toBe(false);
     expect(canSubmitSystemDisruption(model.getSnapshot())).toBe(true);
+  });
+
+  it('retries the pending key for the identical normalized payload', async () => {
+    const create = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error('timeout'), { status: 0 }))
+      .mockResolvedValueOnce(disruption);
+    const model = new SystemDisruptionsModel(
+      { list: vi.fn().mockResolvedValue(emptyPage), create },
+      { listStores: vi.fn().mockResolvedValue([store()]) },
+    );
+
+    await model.create(input);
+    const key = create.mock.calls[0]?.[1];
+    await model.create({ ...input, reason: ' Gangguan koneksi pusat ' });
+    expect(create).toHaveBeenCalledTimes(1);
+    await model.retryUncertainCreate();
+    expect(create.mock.calls[1]?.[1]).toBe(key);
+    expect(create.mock.calls[1]?.[0].reason).toBe('Gangguan koneksi pusat');
   });
 
   it('supports loading/error/empty states and uses only selected store filter in exact pagination', async () => {

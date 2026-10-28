@@ -12,6 +12,7 @@ export default defineConfig({
   schema: 'prisma/schema.prisma',
   migrations: {
     path: 'prisma/migrations',
+    seed: 'tsx prisma/seed.ts',
   },
   // Generation and validation do not need a live database. Migration commands
   // will fail clearly when no usable URL is supplied by the environment.

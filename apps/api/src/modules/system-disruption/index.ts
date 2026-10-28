@@ -1,10 +1,13 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { UserRole } from '../../generated/prisma/enums.js';
+import type { Prisma } from '../../generated/prisma/client.js';
 import { AppError } from '../../errors/app-error.js';
-import type { AuditActor, AuditService } from '../audit/index.js';
+import type { AuditActor, AuditService, RecordAuditEventInput } from '../audit/index.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const IDEMPOTENCY_KEY_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ISO_TIMESTAMP_PATTERN =
   /^(\d{4}-\d{2}-\d{2})T([01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:(?:0\d|1[0-3]):[0-5]\d|14:00))$/;
 
@@ -52,7 +55,7 @@ export type SystemDisruptionPage = Readonly<{
 }>;
 
 export interface SystemDisruptionRepository {
-  create(
+  createIdempotently(
     input: Readonly<{
       id: string;
       storeId: string | null;
@@ -60,8 +63,11 @@ export interface SystemDisruptionRepository {
       endsAt: Date;
       reason: string;
       createdByUserAccountId: string;
+      idempotencyKeyHash: string;
+      requestFingerprint: string;
     }>,
-  ): Promise<SystemDisruptionRecord>;
+    writeAudit: (transaction: Prisma.TransactionClient) => Promise<unknown>,
+  ): Promise<Readonly<{ record: SystemDisruptionRecord; replayed: boolean }>>;
   list(
     input: Readonly<{
       storeId?: string;
@@ -75,6 +81,22 @@ export type SystemDisruptionRequestContext = Readonly<{ clientIp?: string; reque
 
 function invalidInput(message = 'Data gangguan sistem tidak valid.'): AppError {
   return new AppError(400, 'INVALID_SYSTEM_DISRUPTION', message);
+}
+
+function invalidIdempotencyKey(): AppError {
+  return new AppError(
+    400,
+    'INVALID_IDEMPOTENCY_KEY',
+    'Header Idempotency-Key wajib berupa UUID v4 acak yang valid.',
+  );
+}
+
+function idempotencyConflict(): AppError {
+  return new AppError(
+    409,
+    'IDEMPOTENCY_KEY_REUSED',
+    'Idempotency-Key sudah digunakan untuk payload yang berbeda.',
+  );
 }
 
 function assertAdmin(actor: AuditActor): void {
@@ -164,15 +186,27 @@ function auditContext(context: SystemDisruptionRequestContext) {
   };
 }
 
+function normalizeIdempotencyKey(value: unknown): string {
+  if (typeof value !== 'string' || !IDEMPOTENCY_KEY_PATTERN.test(value)) {
+    throw invalidIdempotencyKey();
+  }
+  return value.toLowerCase();
+}
+
+function hash(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
 export class SystemDisruptionService {
   constructor(
     private readonly repository: SystemDisruptionRepository,
-    private readonly audit: Pick<AuditService, 'record'>,
+    private readonly audit: Pick<AuditService, 'recordInTransaction'>,
   ) {}
 
   async create(
     actor: AuditActor,
     input: SystemDisruptionCreateInput,
+    idempotencyKey: unknown,
     context: SystemDisruptionRequestContext = {},
   ): Promise<SystemDisruptionDto> {
     assertAdmin(actor);
@@ -183,30 +217,45 @@ export class SystemDisruptionService {
       throw invalidInput('endsAt harus setelah startsAt.');
     }
     const reason = normalizeReason(input.reason);
-    const row = await this.repository.create({
-      id: randomUUID(),
-      storeId,
-      startsAt,
-      endsAt,
-      reason,
-      createdByUserAccountId: normalizeUuid(actor.userAccountId, 'actor.userAccountId'),
-    });
-    const disruption = toDto(row);
-    await this.audit.record({
+    const normalizedActorId = normalizeUuid(actor.userAccountId, 'actor.userAccountId');
+    const normalizedKey = normalizeIdempotencyKey(idempotencyKey);
+    const fingerprint = hash(
+      JSON.stringify({
+        storeId,
+        startsAt: startsAt.toISOString(),
+        endsAt: endsAt.toISOString(),
+        reason,
+      }),
+    );
+    const recordId = randomUUID();
+    const auditEvent: RecordAuditEventInput = {
       actor,
       action: 'system_disruption.create',
       entityType: 'system_disruption',
-      entityId: disruption.id,
+      entityId: recordId,
       after: {
-        storeId: disruption.storeId,
-        startsAt: disruption.startsAt,
-        endsAt: disruption.endsAt,
-        isActive: disruption.isActive,
+        storeId,
+        startsAt: startsAt.toISOString(),
+        endsAt: endsAt.toISOString(),
+        isActive: true,
       },
-      reason: disruption.reason,
+      reason,
       ...auditContext(context),
-    });
-    return disruption;
+    };
+    const result = await this.repository.createIdempotently(
+      {
+        id: recordId,
+        storeId,
+        startsAt,
+        endsAt,
+        reason,
+        createdByUserAccountId: normalizedActorId,
+        idempotencyKeyHash: hash(normalizedKey),
+        requestFingerprint: fingerprint,
+      },
+      (transaction) => this.audit.recordInTransaction(transaction, auditEvent),
+    );
+    return toDto(result.record);
   }
 
   async list(

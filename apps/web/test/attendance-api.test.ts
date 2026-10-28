@@ -42,6 +42,17 @@ function receipt(replayed = false) {
   };
 }
 
+function locationFailureReceipt() {
+  return {
+    attemptId: UUIDS.attempt,
+    state: 'RECEIVED',
+    type: 'CHECK_IN',
+    receivedAt: '2026-10-11T03:00:00.000Z',
+    replayed: false,
+    locationFailureReason: 'PERMISSION_DENIED',
+  };
+}
+
 function input(
   overrides: Partial<PrepareAttendanceAttemptInput> = {},
 ): PrepareAttendanceAttemptInput {
@@ -75,6 +86,59 @@ function sequencedFetcher(responses: Response[]) {
 }
 
 describe('employee online attendance API', () => {
+  it('uploads the selfie and submits a no-fix attempt with an explicit failure reason', async () => {
+    const { fetcher, requests } = sequencedFetcher([
+      response(201, uploadIntent()),
+      response(204),
+      response(202, locationFailureReceipt()),
+    ]);
+    const options: AttendanceApiOptions = {
+      apiBaseUrl: 'https://app.example/api/v1',
+      fetcher,
+      createIdempotencyKey: () => UUIDS.key,
+    };
+
+    const draft = await prepareAttendanceAttempt(
+      input({ location: null, locationFailureReason: 'PERMISSION_DENIED' }),
+      options,
+    );
+    const result = await submitAttendanceAttempt(draft, options);
+
+    expect(draft.body.location).toBeNull();
+    expect(draft.body.locationFailureReason).toBe('PERMISSION_DENIED');
+    expect(JSON.parse(String(requests[2]?.init.body))).toMatchObject({
+      location: null,
+      locationFailureReason: 'PERMISSION_DENIED',
+    });
+    expect(result).toMatchObject({
+      state: 'RECEIVED',
+      locationFailureReason: 'PERMISSION_DENIED',
+    });
+    expect(result).not.toHaveProperty('attendanceId');
+    expect(result).not.toHaveProperty('validationStatus');
+  });
+
+  it('requires a location failure reason only when there is no fix', async () => {
+    const { fetcher, requests } = sequencedFetcher([]);
+
+    await expect(
+      prepareAttendanceAttempt(input({ location: null }), {
+        apiBaseUrl: 'https://app.example/api/v1',
+        fetcher,
+        createIdempotencyKey: () => UUIDS.key,
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_ATTENDANCE_ATTEMPT' });
+
+    await expect(
+      prepareAttendanceAttempt(input({ locationFailureReason: 'TIMEOUT' }), {
+        apiBaseUrl: 'https://app.example/api/v1',
+        fetcher,
+        createIdempotencyKey: () => UUIDS.key,
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_ATTENDANCE_ATTEMPT' });
+    expect(requests).toHaveLength(0);
+  });
+
   it('runs intent, signed PUT, then attempt with only the strict server contract', async () => {
     const { fetcher, requests } = sequencedFetcher([
       response(201, uploadIntent()),

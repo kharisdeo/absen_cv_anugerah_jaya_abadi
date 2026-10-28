@@ -104,9 +104,20 @@ Hanya Admin. Membuat gangguan aktif dengan `startsAt` dan `endsAt` sebagai times
 yang menyertakan zona waktu, `reason` wajib (1–500 karakter setelah trim), dan `storeId`
 UUID atau `null`/tidak dikirim untuk gangguan global. `endsAt` harus lebih besar daripada
 `startsAt`; store yang dipilih harus ada. Request memakai cookie session, same-origin
-`Origin`, rate limit sensitif, dan response `Cache-Control: no-store`. Field tambahan,
+`Origin`, rate limit sensitif, header `Idempotency-Key` wajib berupa UUID v4 acak,
+dan response `Cache-Control: no-store`. Field tambahan,
 termasuk `isActive` dan identitas pembuat, ditolak; server selalu menetapkan status aktif
 dan pembuat dari session. Respons 201 tidak memuat data akun pembuat.
+
+Server menormalisasi `storeId`, timestamp ke UTC, dan `reason` setelah trim sebelum membuat
+fingerprint payload. Key di-scope menurut ID Admin dari session server; DB hanya menyimpan
+SHA-256 key dan fingerprint. Pengulangan dengan actor, key, dan payload ternormalisasi yang
+sama mengembalikan record yang sama tanpa audit kedua. Key sama dengan payload berbeda
+mendapat HTTP 409 `IDEMPOTENCY_KEY_REUSED`; key hilang atau bukan UUID v4 mendapat HTTP 400
+`INVALID_IDEMPOTENCY_KEY`. Record, fingerprint, dan audit event ditulis dalam satu transaksi
+PostgreSQL, sehingga retry aman setelah client tidak mengetahui apakah respons pertama tiba.
+Gunakan key yang sama hanya untuk retry payload yang identik; payload berbeda memerlukan key
+acak baru.
 
 ```json
 {
@@ -136,11 +147,10 @@ overlap. Guard tersebut hanya mencegah insert `ABSENT` baru. Membuat gangguan ti
 row `daily_attendance_statuses` yang sudah ada, record absensi mentah, atau klasifikasi
 `PRESENT`/`LATE`.
 
-Belum ada `Idempotency-Key`/kolom idempotensi pada schema atau kontrak, jadi pengulangan POST
-adalah create lain (bukan upsert/dedup). Ini tidak menyamakan atau menghapus audit event.
 Mass correction tetap tidak tersedia sampai produk mendefinisikan status/mapping, target
 record, rentang tanggal, dan penanganan terhadap record `PRESENT`/`LATE`/`ABSENT` yang sudah
-ada. BE-023 karena itu tetap PARTIAL.
+ada. Implementasi POST idempotency tidak mengubah attendance mentah atau record harian yang
+sudah ada; BE-023 tetap PARTIAL sampai koreksi massal beserta policy-nya disepakati dan diuji.
 
 ## Selfie privat — BE-015
 
@@ -171,18 +181,27 @@ intent dan memakai conditional `If-None-Match: *`, lalu mengikatnya ke attempt d
 transaksi yang sama. Key accepted tidak pernah ditandatangani untuk client; retry tidak
 dapat menimpa foto yang sudah tersegel. Worker membersihkan foto staging setelah attach
 serta foto staging/accepted untuk intent yang tak terpakai setelah expiry.
-Nama karyawan, waktu penerimaan server, dan koordinat tersimpan sebagai metadata
-watermark pada intent; metadata ini bukan hasil face/liveness verification. Sumber
-foto tetap harus dibatasi UI ke stream kamera; validasi MIME/bytes sendiri tidak dapat
-membuktikan asal kamera secara kriptografis.
+Nama karyawan, waktu penerimaan server, dan koordinat (atau label `Lokasi tidak tersedia`)
+tersimpan sebagai metadata watermark. Server membuat JPEG turunan privat dengan watermark
+yang dirender ke piksel; foto accepted asli tetap immutable. `watermarkApplied` hanya menjadi
+true setelah turunan tersimpan dan status database ter-commit. Read URL Admin/Supervisor hanya
+menunjuk turunan tersebut, tidak pernah foto asli. Bila render/storage gagal, submit dapat
+memerlukan retry idempoten; bukti belum dapat dibaca dan tidak ada URL original yang diterbitkan.
+Retention worker juga memproses antrean watermark legacy sebelum purge. Watermark bukan hasil
+face/liveness verification. Sumber foto tetap harus dibatasi UI ke stream kamera; validasi
+MIME/bytes sendiri tidak dapat membuktikan asal kamera secara kriptografis.
 
 ### GET `/api/v1/admin/attendance-attempts/:attemptId/selfie-url`
 
-Hanya Admin yang dapat meminta signed GET URL sementara untuk attempt yang memiliki selfie
-dan belum melewati retensi. Employee dan role lain ditolak; attempt yang tidak punya bukti,
-sudah kedaluwarsa, atau tidak ditemukan mengembalikan `SELFIE_NOT_FOUND`. Response no-store
-dan URL hanya berlaku selama TTL upload yang sama. Scope Supervisor belum tersedia dan
-tidak boleh ditambahkan sebelum aturan cakupan toko BE-017 diimplementasikan.
+Route legacy hanya mengizinkan Admin meminta signed GET URL sementara untuk attempt yang
+memiliki selfie dan belum melewati retensi. Jalur review
+`GET /api/v1/attendance/verifications/:attendanceId/selfie-url` mengizinkan Admin dan
+Supervisor, dengan scope assignment toko ditegakkan repository. Employee dan role lain ditolak;
+attempt di luar scope, tanpa bukti, kedaluwarsa, atau tidak ditemukan mengembalikan
+`SELFIE_NOT_FOUND`. Kedua jalur hanya menandatangani JPEG derivative privat. Pada read pertama
+untuk foto legacy yang belum ber-watermark, backend memeriksa akses lebih dulu, merender dan
+menyimpan derivative, lalu baru menerbitkan signed GET URL. Response no-store dan URL hanya
+berlaku selama TTL upload yang sama.
 
 ### Retensi selfie
 
@@ -197,16 +216,16 @@ belum ada scheduler/provider yang dipilih atau dipasang.
 
 Error contract untuk endpoint selfie:
 
-| HTTP | `code`                                                                    | Makna                                                         |
-| ---- | ------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| 400  | `INVALID_SELFIE_UPLOAD_INTENT`, `INVALID_SELFIE_REFERENCE`                | Body atau UUID tidak valid.                                   |
-| 401  | `UNAUTHENTICATED`                                                         | Sesi tidak ada/tidak sah.                                     |
-| 403  | `CSRF_ORIGIN_REJECTED`, `FORBIDDEN`, `ATTENDANCE_DEVICE_BINDING_REQUIRED` | Origin, role, profil, atau perangkat tidak memenuhi syarat.   |
-| 404  | `SELFIE_NOT_FOUND`                                                        | Attempt tidak memiliki bukti aktif yang boleh dibaca.         |
-| 413  | `PAYLOAD_TOO_LARGE`                                                       | Payload intent melampaui batas request.                       |
-| 429  | `RATE_LIMITED`                                                            | Rate limit sensitif terlampaui.                               |
-| 422  | `ATTENDANCE_EVIDENCE_INVALID`                                             | Intent, object, metadata, signature, atau ukuran tidak cocok. |
-| 503  | `ATTENDANCE_EVIDENCE_VALIDATION_UNAVAILABLE`                              | Database/storage tidak tersedia; operasi gagal tertutup.      |
+| HTTP | `code`                                                                       | Makna                                                                     |
+| ---- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| 400  | `INVALID_SELFIE_UPLOAD_INTENT`, `INVALID_SELFIE_REFERENCE`                   | Body atau UUID tidak valid.                                               |
+| 401  | `UNAUTHENTICATED`                                                            | Sesi tidak ada/tidak sah.                                                 |
+| 403  | `CSRF_ORIGIN_REJECTED`, `FORBIDDEN`, `ATTENDANCE_DEVICE_BINDING_REQUIRED`    | Origin, role, profil, atau perangkat tidak memenuhi syarat.               |
+| 404  | `SELFIE_NOT_FOUND`                                                           | Attempt tidak memiliki bukti aktif yang boleh dibaca.                     |
+| 413  | `PAYLOAD_TOO_LARGE`                                                          | Payload intent melampaui batas request.                                   |
+| 429  | `RATE_LIMITED`                                                               | Rate limit sensitif terlampaui.                                           |
+| 422  | `ATTENDANCE_EVIDENCE_INVALID`                                                | Intent, object, metadata, signature, atau ukuran tidak cocok.             |
+| 503  | `ATTENDANCE_EVIDENCE_VALIDATION_UNAVAILABLE`, `SELFIE_WATERMARK_UNAVAILABLE` | Database/storage/render watermark tidak tersedia; operasi gagal tertutup. |
 
 ## POST `/api/v1/attendance/attempts` — BE-013/BE-014
 
@@ -246,6 +265,29 @@ Contoh request:
 }
 ```
 
+Jika browser tidak memperoleh fix setelah capture/retry, selfie tetap dapat dikirim sebagai
+attempt online tanpa koordinat palsu. `location` wajib bernilai `null` dan
+`locationFailureReason` wajib salah satu `PERMISSION_DENIED`, `POSITION_UNAVAILABLE`, atau
+`TIMEOUT`. Field tersebut adalah bukti kondisi client, bukan keputusan validasi server:
+
+```json
+{
+  "idempotencyKey": "00000000-0000-4000-8000-000000000011",
+  "type": "CHECK_IN",
+  "clientRecordedAt": "2026-10-11T10:00:00+07:00",
+  "networkStatus": "ONLINE",
+  "location": null,
+  "locationFailureReason": "PERMISSION_DENIED",
+  "validationMethod": "GPS",
+  "selfie": {
+    "blob": "00000000-0000-4000-8000-000000000002",
+    "sizeKb": 180
+  },
+  "liveness": { "faceDetected": false, "passed": false },
+  "proofCode": null
+}
+```
+
 Schema strict: field yang tidak dikenal ditolak, termasuk `deviceId`, `employeeId`,
 `serverTime`, `distanceMeters`, `geofenceResult`, `status`, dan `validationStatus`.
 `storeId` opsional harus UUID; ia hanya selection hint, bukan bukti assignment. Timestamp
@@ -266,6 +308,14 @@ tidak dikirim atau `null` sampai BE-019 menyediakan proof generator.
   dipilih/di-resolve, lalu menyimpan snapshot store, jarak, radius, batas akurasi,
   hasil geofence, dan flag koordinat identik berulang. Lokasi tidak disalin ke audit
   maupun response; hasil geofence bukan status absensi final.
+- Saat `location` bernilai `null`, ketiga koordinat disimpan sebagai SQL `NULL`, bersama
+  `locationFailureReason`. Tidak dibuat `Attendance` maupun `LocationProof`; receipt tetap
+  `RECEIVED` tanpa `attendanceId`/`validationStatus`, dan selfie tetap sealed serta tertaut
+  privat ke attempt. Attempt yang receipt-nya berada pada jendela shift ikut menahan daily
+  reconciliation agar tidak membuat `ABSENT`. Failure reason client tidak pernah mengubah
+  attempt menjadi `VALID` atau `ABSENT`. Raw attempt no-fix belum menjadi item dalam antrean
+  verifikasi Attendance dan belum memiliki endpoint keputusan; receipt ini hanya konfirmasi
+  penerimaan, bukan klaim bahwa review Admin/Supervisor sudah tersedia.
 - Nilai tersimpan `geofenceResult`: `WITHIN_LIMITS`, `OUTSIDE_RADIUS`,
   `ACCURACY_EXCEEDED`, `OUTSIDE_RADIUS_AND_ACCURACY_EXCEEDED`,
   `STORE_SELECTION_REQUIRED`, `STORE_NOT_ASSIGNED`, atau `NO_ACTIVE_ASSIGNED_STORE`.
@@ -281,8 +331,10 @@ tidak dikirim atau `null` sampai BE-019 menyediakan proof generator.
   tidak ada baris `Attendance` yang dibuat. Jika aturan lulus, server juga membuat baris
   `Attendance`, `SelfieCapture`, dan `LocationProof` dalam transaksi yang sama dan menulis
   audit `attendance.record.create`. Audit tidak memuat koordinat atau foto mentah.
-- Receipt sukses pertama tetap HTTP `202` dengan state `RECORDED`, `attendanceId`, dan status
-  validasi hasil server. Attendance online tetap `PENDING_VERIFICATION`. Untuk `networkStatus`
+- Bila aturan shift lulus dan lokasi tersedia, receipt sukses pertama tetap HTTP `202` dengan
+  state `RECORDED`, `attendanceId`, dan status validasi hasil server. Tanpa fix lokasi, receipt
+  HTTP `202` tetap `RECEIVED` dan tidak menyatakan Attendance telah dibuat. Attendance online
+  dengan lokasi tetap `PENDING_VERIFICATION`. Untuk `networkStatus`
   `OFFLINE`, server menghitung drift absolut dan umur sync memakai `AttendanceAttempt.receivedAt`
   dari database serta `clientRecordedAt` asli: drift `> 5 menit` atau umur `> 24 jam` membuat
   OR, tepat 24 jam tetap `PENDING_VERIFICATION` akibat drift yang melampaui 5 menit. Liveness

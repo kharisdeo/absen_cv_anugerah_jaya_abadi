@@ -1,0 +1,68 @@
+$ pnpm --recursive --if-present build
+Scope: 2 of 3 workspace projects
+apps/api build$ pnpm db:generate && tsc -p tsconfig.build.json
+apps/web build$ tsc --noEmit -p tsconfig.json && vite build && node scripts/check-performance-budget.mjs
+apps/api build: $ prisma generate --schema prisma/schema.prisma
+apps/api build: Loaded Prisma config from prisma.config.ts.
+apps/api build: Prisma schema loaded from prisma\schema.prisma.
+apps/api build: ✔ Generated Prisma Client (7.10.0) to .\src\generated\prisma in 357ms
+apps/web build: vite v8.3.4 building client environment for production...
+apps/web build: transforming...
+apps/api build: Done
+apps/web build: ✓ 133 modules transformed.
+apps/web build: rendering chunks...
+apps/web build: computing gzip size...
+apps/web build: dist/manifest.webmanifest                             0.45 kB
+apps/web build: dist/index.html                                       0.77 kB │ gzip:  0.41 kB
+apps/web build: dist/assets/AdminEmployeesPage-BRPHWsIg.css           2.61 kB │ gzip:  0.80 kB
+apps/web build: dist/assets/AdminAuditLogsPage-C14UjrlP.css           2.67 kB │ gzip:  0.96 kB
+apps/web build: dist/assets/EmployeeRequestsPage-DSAupP6L.css         2.74 kB │ gzip:  0.82 kB
+apps/web build: dist/assets/MonthlyReportPage-CeGEaGFm.css            3.29 kB │ gzip:  0.98 kB
+apps/web build: dist/assets/employee-pages-BMYW47Hp.css               4.49 kB │ gzip:  1.20 kB
+apps/web build: dist/assets/AdminAccountsPage-DCJg217e.css            4.55 kB │ gzip:  1.33 kB
+apps/web build: dist/assets/AdminStoresPage-VXSGlXuW.css              4.58 kB │ gzip:  1.32 kB
+apps/web build: dist/assets/RoleHome-BoX-6PDd.css                     5.20 kB │ gzip:  1.60 kB
+apps/web build: dist/assets/notifications-CEvZqSxv.css                5.50 kB │ gzip:  1.46 kB
+apps/web build: dist/assets/review-pages-BYBk7Ejm.css                 5.54 kB │ gzip:  1.57 kB
+apps/web build: dist/assets/AdminDashboardPage-CAs2r4kx.css           7.05 kB │ gzip:  1.73 kB
+apps/web build: dist/assets/AdminShiftsPage-CUCpBxgY.css             10.17 kB │ gzip:  1.87 kB
+apps/web build: dist/assets/index-B4tBtANw.css                       23.29 kB │ gzip:  5.91 kB
+apps/web build: dist/assets/StatusBadge-C9E0VhQn.js                   0.43 kB │ gzip:  0.28 kB
+apps/web build: dist/assets/DataTable-LyySbi7c.js                     0.81 kB │ gzip:  0.41 kB
+apps/web build: dist/assets/Modal-v99xGh2Y.js                         0.96 kB │ gzip:  0.50 kB
+apps/web build: dist/assets/attendance-state-hInD8sLE.js              1.07 kB │ gzip:  0.47 kB
+apps/web build: dist/assets/api-contract-DmPMBQUi.js                  1.40 kB │ gzip:  0.75 kB
+apps/web build: dist/assets/admin-employees-api-B74UwzOV.js           1.66 kB │ gzip:  0.78 kB
+apps/web build: dist/assets/admin-shifts-api-41C5YcPF.js              1.93 kB │ gzip:  0.94 kB
+apps/web build: dist/assets/admin-stores-api-CqFDcU3v.js              2.98 kB │ gzip:  1.05 kB
+apps/web build: dist/assets/EmployeeLeavePage-DgqiEfIi.js             3.18 kB │ gzip:  1.23 kB
+apps/web build: dist/assets/EmployeeSchedulePage-DEkjdnvA.js          3.79 kB │ gzip:  1.44 kB
+apps/web build: dist/assets/EmployeeHistoryPage-BnRwMcCG.js           4.73 kB │ gzip:  1.72 kB
+apps/web build: dist/assets/workbox-window.prod.es5-Bd17z0YL.js       5.65 kB │ gzip:  2.20 kB
+apps/web build: dist/assets/employee-pages-CelC5UqA.js                6.17 kB │ gzip:  2.26 kB
+apps/web build: dist/assets/NotificationsPage-DUZjQGA9.js             8.14 kB │ gzip:  2.96 kB
+apps/web build: dist/assets/use-admin-dashboard-BogIAPE8.js           8.44 kB │ gzip:  3.10 kB
+apps/web build: dist/assets/review-pages-CKASDxxO.js                  9.28 kB │ gzip:  2.66 kB
+apps/web build: dist/assets/AdminAuditLogsPage-EyCYqjGR.js           12.22 kB │ gzip:  4.15 kB
+apps/web build: dist/assets/AdminEmployeesPage-DxZxhFee.js           12.45 kB │ gzip:  3.69 kB
+apps/web build: dist/assets/RequestReviewPage-CdLrtvcc.js            13.07 kB │ gzip:  4.13 kB
+apps/web build: dist/assets/AdminDashboardPage-DPCo9EkB.js           13.48 kB │ gzip:  3.94 kB
+apps/web build: dist/assets/VerificationReviewPage-CnwEXGjT.js       14.83 kB │ gzip:  4.66 kB
+apps/web build: dist/assets/AdminSystemDisruptionsPage-BIdSszeP.js   17.98 kB │ gzip:  5.62 kB
+apps/web build: dist/assets/MonthlyReportPage-DgdOphTK.js            18.62 kB │ gzip:  6.29 kB
+apps/web build: dist/assets/EmployeeRequestsPage-DFYHrQIP.js         18.86 kB │ gzip:  5.91 kB
+apps/web build: dist/assets/AdminStoresPage--NWH755B.js              21.03 kB │ gzip:  5.66 kB
+apps/web build: dist/assets/AdminAccountsPage-DrQh8apo.js            29.26 kB │ gzip:  7.64 kB
+apps/web build: dist/assets/AdminShiftsPage-7AE7IwSU.js              53.34 kB │ gzip: 12.60 kB
+apps/web build: dist/assets/RoleHome-H5Nb6RXP.js                     67.15 kB │ gzip: 18.02 kB
+apps/web build: dist/assets/index-b4eN_-wS.js                       304.26 kB │ gzip: 95.26 kB
+apps/web build: ✓ built in 2.34s
+apps/web build: PWA v2.0.0
+apps/web build: mode      generateSW
+apps/web build: precache  51 entries (729.45 KiB)
+apps/web build: files generated
+apps/web build:   dist/sw.js
+apps/web build:   dist/workbox-2fbc6a65.js
+apps/web build: [PWA] Build output contract passed: manifest, install icons, service worker/Workbox, 48 local precache path(s), one index.html navigation route, and /api/ exclusion.
+apps/web build: [INT-012] Initial assets (2 JS/CSS file(s) + HTML): 328330/665600 raw bytes; 100418/184320 gzip bytes.
+apps/web build: Done

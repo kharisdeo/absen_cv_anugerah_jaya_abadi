@@ -15,7 +15,10 @@ const disruptionSelect = {
 } as const;
 
 function isForeignKeyError(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003';
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    (error as { code?: unknown }).code === 'P2003'
+  );
 }
 
 function storeNotFound(): AppError {
@@ -25,16 +28,58 @@ function storeNotFound(): AppError {
 export class PrismaSystemDisruptionRepository implements SystemDisruptionRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
-  async create(input: Parameters<SystemDisruptionRepository['create']>[0]) {
+  async createIdempotently(
+    input: Parameters<SystemDisruptionRepository['createIdempotently']>[0],
+    writeAudit: Parameters<SystemDisruptionRepository['createIdempotently']>[1],
+  ) {
     try {
-      return await this.prisma.systemDisruption.create({
-        data: input,
-        select: disruptionSelect,
+      return await this.prisma.$transaction(async (transaction) => {
+        const existing = await transaction.systemDisruption.findUnique({
+          where: {
+            createdByUserAccountId_idempotencyKeyHash: {
+              createdByUserAccountId: input.createdByUserAccountId,
+              idempotencyKeyHash: input.idempotencyKeyHash,
+            },
+          },
+          select: { ...disruptionSelect, requestFingerprint: true },
+        });
+        if (existing) {
+          if (existing.requestFingerprint !== input.requestFingerprint) throw idempotencyConflict();
+          return { record: existing, replayed: true };
+        }
+
+        const record = await transaction.systemDisruption.create({
+          data: input,
+          select: disruptionSelect,
+        });
+        await writeAudit(transaction);
+        return { record, replayed: false };
       });
     } catch (error: unknown) {
+      if (isUniqueConstraintError(error)) {
+        const existing = await this.findByIdempotencyKey(input);
+        if (existing) {
+          if (existing.requestFingerprint !== input.requestFingerprint) throw idempotencyConflict();
+          return { record: existing, replayed: true };
+        }
+      }
       if (input.storeId !== null && isForeignKeyError(error)) throw storeNotFound();
       throw error;
     }
+  }
+
+  private findByIdempotencyKey(
+    input: Parameters<SystemDisruptionRepository['createIdempotently']>[0],
+  ) {
+    return this.prisma.systemDisruption.findUnique({
+      where: {
+        createdByUserAccountId_idempotencyKeyHash: {
+          createdByUserAccountId: input.createdByUserAccountId,
+          idempotencyKeyHash: input.idempotencyKeyHash,
+        },
+      },
+      select: { ...disruptionSelect, requestFingerprint: true },
+    });
   }
 
   async list(input: Parameters<SystemDisruptionRepository['list']>[0]) {
@@ -50,4 +95,19 @@ export class PrismaSystemDisruptionRepository implements SystemDisruptionReposit
       hasNextPage: rows.length === input.take,
     };
   }
+}
+
+function idempotencyConflict(): AppError {
+  return new AppError(
+    409,
+    'IDEMPOTENCY_KEY_REUSED',
+    'Idempotency-Key sudah digunakan untuk payload yang berbeda.',
+  );
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    (error as { code?: unknown }).code === 'P2002'
+  );
 }

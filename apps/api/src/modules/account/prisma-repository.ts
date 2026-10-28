@@ -29,6 +29,21 @@ type TransactionClient = Prisma.TransactionClient;
 // Shared with the employee repository so username/NIK collision checks cannot race.
 export const ACCOUNT_IDENTIFIER_LOCK_KEY = 0x41444d494e01n;
 
+/**
+ * PostgreSQL advisory locks return `void`, which Prisma's PostgreSQL adapter cannot deserialize
+ * from a top-level SELECT. Materialize the lock call, but return a supported scalar to Prisma.
+ */
+export async function acquireAccountIdentifierLock(tx: TransactionClient): Promise<void> {
+  await tx.$queryRaw(
+    Prisma.sql`
+      WITH account_identifier_lock AS MATERIALIZED (
+        SELECT pg_advisory_xact_lock(${ACCOUNT_IDENTIFIER_LOCK_KEY})
+      )
+      SELECT TRUE AS locked FROM account_identifier_lock
+    `,
+  );
+}
+
 function mapAccount(row: AccountRow): AccountDto {
   return {
     id: row.id,
@@ -134,9 +149,7 @@ export class PrismaAccountRepository implements AccountRepository {
   async create(data: AccountCreateData): Promise<AccountDto> {
     try {
       return await this.prisma.$transaction(async (tx) => {
-        await tx.$queryRaw(
-          Prisma.sql`SELECT pg_advisory_xact_lock(${ACCOUNT_IDENTIFIER_LOCK_KEY})`,
-        );
+        await acquireAccountIdentifierLock(tx);
         const matchingEmployee = await tx.employee.findUnique({
           where: { nik: data.username },
           select: { id: true },
@@ -184,9 +197,7 @@ export class PrismaAccountRepository implements AccountRepository {
   ): Promise<AccountMutation | null> {
     try {
       return await this.prisma.$transaction(async (tx) => {
-        await tx.$queryRaw(
-          Prisma.sql`SELECT pg_advisory_xact_lock(${ACCOUNT_IDENTIFIER_LOCK_KEY})`,
-        );
+        await acquireAccountIdentifierLock(tx);
 
         const before = await findAccount(tx, id);
         if (!before) return null;

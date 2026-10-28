@@ -138,7 +138,7 @@ export function statusRowsCte(input: CteFilter): Prisma.Sql {
     filters.push(Prisma.sql`sa.work_shift_id = ${input.shiftId}::uuid`);
   if (input.employee !== undefined) {
     filters.push(
-      Prisma.sql`e.id = ${input.employee.employeeId}::uuid AND e.account_id = ${input.employee.userAccountId}::uuid`,
+      Prisma.sql`employee.id = ${input.employee.employeeId}::uuid AND employee.account_id = ${input.employee.userAccountId}::uuid`,
     );
   }
   if (input.employeeId !== undefined) {

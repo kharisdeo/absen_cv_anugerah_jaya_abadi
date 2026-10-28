@@ -173,6 +173,25 @@ describe('PrismaDailyAttendanceRepository', () => {
     ).toBe(false);
   });
 
+  it('blocks ABSENT for a received no-fix attempt without requiring coordinate columns', async () => {
+    const { repository, queries } = setup({ guard: { pendingAttemptExists: true } });
+
+    expect(await repository.markAbsentIfEligible({ shift, evaluatedAt })).toBe('blocked');
+    const guardQuery = queries.find((query) => query.sql.includes('AS "pendingAttemptExists"'));
+    expect(guardQuery?.sql).toContain('FROM attendance_attempts AS attempt');
+    expect(guardQuery?.sql).toContain("attempt.processing_status = 'RECEIVED'");
+    expect(guardQuery?.sql).toContain('attempt.received_at >= shift_window.starts_at');
+    expect(guardQuery?.sql).toContain(
+      "attempt.received_at <= shift_window.ends_at + interval '2 hours'",
+    );
+    expect(guardQuery?.sql).not.toMatch(
+      /attempt\.(?:latitude|longitude|accuracy_meters)\s+IS NOT NULL/i,
+    );
+    expect(
+      queries.some((query) => query.sql.includes('INSERT INTO daily_attendance_statuses')),
+    ).toBe(false);
+  });
+
   it.each([
     ['closed month', { closed: true }, 'closed'],
     ['nonworking date', { nonWorking: true }, 'non_working'],

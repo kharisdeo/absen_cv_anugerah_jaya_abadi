@@ -5,6 +5,7 @@ import { AppError } from '../../errors/app-error.js';
 import { UserRole } from '../../generated/prisma/enums.js';
 import type { AuthPrincipal } from '../auth/contracts.js';
 import { assertAttendanceEmployeeActor } from './authorization.js';
+import { renderWatermarkedSelfie } from './selfie-watermark.js';
 import type { AttendanceEvidenceReferenceVerifier, VerifiedSelfieReference } from './index.js';
 import type { PrivateSelfieStorage, SignedSelfieUpload } from './private-selfie-storage.js';
 
@@ -33,6 +34,17 @@ export type CreatePendingSelfieUploadIntentData = Readonly<{
 
 export type PendingSelfieUploadIntent = CreatePendingSelfieUploadIntentData;
 
+export type SelfieWatermarkSource = Readonly<{
+  referenceHash: string;
+  objectKey: string;
+  watermarkedObjectKey: string;
+  watermarkApplied: boolean;
+  contentType: string;
+  sizeBytes: number;
+  retentionExpiresAt: Date;
+  watermarkMetadata: unknown;
+}>;
+
 export interface SelfieUploadIntentRepository {
   createPending(data: CreatePendingSelfieUploadIntentData): Promise<void>;
   findPendingForVerification(
@@ -49,7 +61,46 @@ export interface SelfieUploadIntentRepository {
       now: Date;
       supervisorUserAccountId?: string;
     }>,
-  ): Promise<Readonly<{ objectKey: string; contentType: string; retentionExpiresAt: Date }> | null>;
+  ): Promise<Readonly<{
+    objectKey: string;
+    contentType: string;
+    retentionExpiresAt: Date;
+    watermarkApplied: boolean;
+  }> | null>;
+  reserveWatermarkedObjectForAttempt(
+    input: Readonly<{
+      attemptId: string;
+      candidateObjectKey: string;
+      now: Date;
+    }>,
+  ): Promise<SelfieWatermarkSource | null>;
+  markWatermarkApplied(
+    input: Readonly<{
+      attemptId: string;
+      referenceHash: string;
+      originalObjectKey: string;
+      watermarkedObjectKey: string;
+      sizeBytes: number;
+      now: Date;
+    }>,
+  ): Promise<boolean>;
+  listPendingWatermarkAttempts(
+    input: Readonly<{ now: Date; take: number }>,
+  ): Promise<readonly string[]>;
+  previewRetentionCandidates(input: Readonly<{ now: Date; take: number }>): Promise<
+    Readonly<{
+      watermarkCandidates: number;
+      attachedStagingCandidates: number;
+      expiredAttachedCandidates: number;
+      expiredPendingCandidates: number;
+      batchLimitHit: Readonly<{
+        watermark: boolean;
+        attachedStaging: boolean;
+        expiredAttached: boolean;
+        expiredPending: boolean;
+      }>;
+    }>
+  >;
   listAttachedStaging(
     input: Readonly<{ take: number }>,
   ): Promise<readonly Readonly<{ referenceHash: string; stagingObjectKey: string }>[]>;
@@ -63,6 +114,7 @@ export interface SelfieUploadIntentRepository {
     readonly Readonly<{
       referenceHash: string;
       objectKey: string;
+      watermarkedObjectKey: string | null;
       attachedAttemptId: string | null;
     }>[]
   >;
@@ -70,6 +122,7 @@ export interface SelfieUploadIntentRepository {
     input: Readonly<{
       referenceHash: string;
       objectKey: string;
+      watermarkedObjectKey: string | null;
       attachedAttemptId: string | null;
       deletedAt: Date;
     }>,
@@ -101,6 +154,21 @@ export type SelfieRetentionBatchResult = Readonly<{
   stagingPurged: number;
   failures: number;
 }>;
+export type SelfieRetentionPreview = Readonly<{
+  previewedAt: string;
+  batchSize: number;
+  watermarkCandidates: number;
+  attachedStagingCandidates: number;
+  expiredAttachedCandidates: number;
+  expiredPendingCandidates: number;
+  batchLimitHit: Readonly<{
+    watermark: boolean;
+    attachedStaging: boolean;
+    expiredAttached: boolean;
+    expiredPending: boolean;
+  }>;
+}>;
+export type SelfieWatermarkBatchResult = Readonly<{ watermarked: number; failures: number }>;
 
 function invalidEvidence(): AppError {
   return new AppError(422, 'ATTENDANCE_EVIDENCE_INVALID', 'Referensi bukti absensi tidak valid.');
@@ -279,6 +347,153 @@ export class SelfieUploadService implements AttendanceEvidenceReferenceVerifier 
     };
   }
 
+  async applyWatermarkForAttempt(attemptId: string): Promise<void> {
+    let source: SelfieWatermarkSource | null;
+    try {
+      source = await this.repository.reserveWatermarkedObjectForAttempt({
+        attemptId,
+        candidateObjectKey: `attendance/selfie-watermarked/${randomUUID()}`,
+        now: this.now(),
+      });
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw unavailable();
+    }
+    if (!source)
+      throw new AppError(
+        503,
+        'SELFIE_WATERMARK_UNAVAILABLE',
+        'Watermark bukti selfie belum tersedia. Coba lagi nanti.',
+      );
+    if (source.watermarkApplied) return;
+
+    let original;
+    try {
+      original = await this.storage.inspectObject(source.objectKey);
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw unavailable();
+    }
+    if (
+      !isValidPrivateImage(original, source.referenceHash, source.contentType, source.sizeBytes) ||
+      !source.watermarkMetadata ||
+      typeof source.watermarkMetadata !== 'object' ||
+      Array.isArray(source.watermarkMetadata)
+    ) {
+      throw new AppError(
+        503,
+        'SELFIE_WATERMARK_UNAVAILABLE',
+        'Metadata bukti selfie tidak dapat diverifikasi.',
+      );
+    }
+
+    let derivative: Buffer;
+    try {
+      derivative = await renderWatermarkedSelfie(
+        original.bytes!,
+        source.contentType,
+        source.watermarkMetadata as Parameters<typeof renderWatermarkedSelfie>[2],
+      );
+    } catch {
+      throw new AppError(
+        503,
+        'SELFIE_WATERMARK_UNAVAILABLE',
+        'Watermark bukti selfie gagal dibuat. Coba lagi nanti.',
+      );
+    }
+
+    try {
+      await this.storage.sealObject({
+        sealedObjectKey: source.watermarkedObjectKey,
+        bytes: derivative,
+        contentType: 'image/jpeg',
+        referenceHash: source.referenceHash,
+      });
+    } catch (error) {
+      if (!(error instanceof AppError) || error.code !== 'ATTENDANCE_EVIDENCE_INVALID') {
+        if (error instanceof AppError) throw error;
+        throw unavailable();
+      }
+
+      // Another retry may have completed the same reserved immutable derivative.
+      let existing;
+      try {
+        existing = await this.storage.inspectObject(source.watermarkedObjectKey);
+      } catch (inspectError) {
+        if (inspectError instanceof AppError) throw inspectError;
+        throw unavailable();
+      }
+      if (
+        !existing ||
+        existing.referenceHash !== source.referenceHash ||
+        existing.contentType !== 'image/jpeg' ||
+        existing.sizeBytes < 1 ||
+        existing.sizeBytes > MAX_SELFIE_SIZE_BYTES ||
+        existing.imageType !== 'jpg' ||
+        !existing.bytes ||
+        existing.bytes.byteLength !== existing.sizeBytes
+      ) {
+        throw new AppError(
+          503,
+          'SELFIE_WATERMARK_UNAVAILABLE',
+          'Turunan watermark yang tersimpan tidak valid.',
+        );
+      }
+      derivative = Buffer.from(existing.bytes);
+    }
+
+    try {
+      const marked = await this.repository.markWatermarkApplied({
+        attemptId,
+        referenceHash: source.referenceHash,
+        originalObjectKey: source.objectKey,
+        watermarkedObjectKey: source.watermarkedObjectKey,
+        sizeBytes: derivative.byteLength,
+        now: this.now(),
+      });
+      if (!marked) throw new Error('Watermark state was not committed');
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw new AppError(
+        503,
+        'SELFIE_WATERMARK_UNAVAILABLE',
+        'Status watermark belum tersimpan. Coba lagi nanti.',
+      );
+    }
+  }
+
+  async watermarkPendingBatch(
+    batchSize = 100,
+    now = this.now(),
+  ): Promise<SelfieWatermarkBatchResult> {
+    if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 500) {
+      throw new RangeError('Watermark batch size must be between 1 and 500.');
+    }
+    const attempts = await this.repository.listPendingWatermarkAttempts({ now, take: batchSize });
+    let watermarked = 0;
+    let failures = 0;
+    for (const attemptId of attempts) {
+      try {
+        await this.applyWatermarkForAttempt(attemptId);
+        watermarked += 1;
+      } catch {
+        failures += 1;
+      }
+    }
+    return { watermarked, failures };
+  }
+
+  async previewRetentionCandidates(
+    batchSize = 500,
+    now = this.now(),
+  ): Promise<SelfieRetentionPreview> {
+    if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 500) {
+      throw new RangeError('Retention preview batch size must be between 1 and 500.');
+    }
+    const candidates = await this.repository.previewRetentionCandidates({ now, take: batchSize });
+    return { previewedAt: now.toISOString(), batchSize, ...candidates };
+  }
+
   async createReadUrl(
     principal: AuthPrincipal,
     attemptId: string,
@@ -286,11 +501,9 @@ export class SelfieUploadService implements AttendanceEvidenceReferenceVerifier 
     if (principal.role !== UserRole.ADMIN) {
       throw new AppError(403, 'FORBIDDEN', 'Hanya Admin yang dapat membuka bukti selfie.');
     }
-    const now = this.now();
-    const attached = await this.repository.findAttachedObjectForAttempt({ attemptId, now });
-    if (!attached) {
-      throw new AppError(404, 'SELFIE_NOT_FOUND', 'Bukti selfie tidak ditemukan.');
-    }
+    let now = this.now();
+    const attached = await this.findWatermarkedObjectForRead({ attemptId, now });
+    now = this.now();
     const remainingRetentionSeconds = Math.floor(
       (attached.retentionExpiresAt.getTime() - now.getTime()) / 1000,
     );
@@ -320,17 +533,15 @@ export class SelfieUploadService implements AttendanceEvidenceReferenceVerifier 
     if (principal.role !== UserRole.ADMIN && principal.role !== UserRole.SUPERVISOR) {
       throw new AppError(403, 'FORBIDDEN', 'Anda tidak memiliki akses ke bukti selfie absensi.');
     }
-    const now = this.now();
-    const attached = await this.repository.findAttachedObjectForAttempt({
+    let now = this.now();
+    const attached = await this.findWatermarkedObjectForRead({
       attemptId,
       now,
       ...(principal.role === UserRole.SUPERVISOR
         ? { supervisorUserAccountId: principal.userAccountId }
         : {}),
     });
-    if (!attached) {
-      throw new AppError(404, 'SELFIE_NOT_FOUND', 'Bukti selfie tidak ditemukan.');
-    }
+    now = this.now();
     const remainingRetentionSeconds = Math.floor(
       (attached.retentionExpiresAt.getTime() - now.getTime()) / 1000,
     );
@@ -349,6 +560,29 @@ export class SelfieUploadService implements AttendanceEvidenceReferenceVerifier 
       if (error instanceof AppError) throw error;
       throw unavailable();
     }
+  }
+
+  private async findWatermarkedObjectForRead(input: {
+    attemptId: string;
+    now: Date;
+    supervisorUserAccountId?: string;
+  }) {
+    let attached = await this.repository.findAttachedObjectForAttempt(input);
+    if (!attached) {
+      throw new AppError(404, 'SELFIE_NOT_FOUND', 'Bukti selfie tidak ditemukan.');
+    }
+    if (!attached.watermarkApplied) {
+      await this.applyWatermarkForAttempt(input.attemptId);
+      attached = await this.repository.findAttachedObjectForAttempt(input);
+    }
+    if (!attached?.watermarkApplied) {
+      throw new AppError(
+        503,
+        'SELFIE_WATERMARK_UNAVAILABLE',
+        'Bukti selfie ber-watermark belum tersedia.',
+      );
+    }
+    return attached;
   }
 
   async purgeExpiredBatch(batchSize = 100, now = this.now()): Promise<SelfieRetentionBatchResult> {
@@ -381,10 +615,14 @@ export class SelfieUploadService implements AttendanceEvidenceReferenceVerifier 
     for (const selfie of expiredAttached) {
       try {
         await this.storage.deleteObject(selfie.objectKey);
+        if (selfie.watermarkedObjectKey) {
+          await this.storage.deleteObject(selfie.watermarkedObjectKey);
+        }
         if (
           await this.repository.markAttachedObjectPurged({
             referenceHash: selfie.referenceHash,
             objectKey: selfie.objectKey,
+            watermarkedObjectKey: selfie.watermarkedObjectKey,
             attachedAttemptId: selfie.attachedAttemptId,
             deletedAt: now,
           })
@@ -425,6 +663,22 @@ export class UnavailableSelfieUploadIntentRepository implements SelfieUploadInte
   }
 
   async findPendingForVerification(): Promise<never> {
+    throw unavailable();
+  }
+
+  async reserveWatermarkedObjectForAttempt(): Promise<never> {
+    throw unavailable();
+  }
+
+  async markWatermarkApplied(): Promise<never> {
+    throw unavailable();
+  }
+
+  async listPendingWatermarkAttempts(): Promise<never> {
+    throw unavailable();
+  }
+
+  async previewRetentionCandidates(): Promise<never> {
     throw unavailable();
   }
 

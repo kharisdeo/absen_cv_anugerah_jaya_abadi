@@ -1220,7 +1220,9 @@ dipilih, tetapi belum diprovisioning atau diverifikasi; provider production belu
 
 ### DEP-006 - Production release gate [P1]
 
-Sebelum production: semua P0 acceptance lulus; device matrix lulus; security checklist ditandatangani; backup terbaru terverifikasi; rollback image/build tersedia; admin seed dibuat aman; retention/cron/notification/monitoring aktif; owner bisnis menyetujui radius, toko, shift, supervisor, dan metode validasi alternatif.
+Sebelum production: semua P0 acceptance lulus; device matrix lulus; security checklist ditandatangani; backup terbaru terverifikasi; rollback image/build tersedia; admin seed dibuat aman; retention/cron/notification/monitoring aktif; owner bisnis menyetujui radius, toko, shift, supervisor, dan metode validasi alternatif. Catat juga keputusan scope Admin 2FA (mandatory/optional, factor, recovery, operator) dan named owner untuk incident/rollback.
+
+**Status release checkpoint 2026-10-15: NOT GO-LIVE READY.** Lihat [AUD-26 release snapshot](./audit/2026-10-14/AUD-26-RELEASE-STATUS.md) untuk pemisahan bukti local, PostgreSQL, browser/device, staging/provider, dan production serta owner blocker. Checkpoint ini tidak mengubah keputusan bisnis dan tidak mengklaim staging atau production sudah diuji.
 
 ### DEP-007 - Migration and rollback [P0]
 
@@ -1291,6 +1293,9 @@ Dokumentasikan cara: login pertama, ganti HP, GPS error, approval pending, offli
 - Backup/restore/monitoring verified.
 - Privacy notice/consent approved.
 - Rollback owner and incident contact assigned.
+- Admin 2FA scope and recovery/operator decision recorded; implementation and test status match that decision.
+
+**Status DEP-015: OPEN.** Tidak ada nama rollback owner atau incident contact dan tidak ada bukti staging drill di checkpoint 2026-10-15. Jangan menyetujui go-live sampai semua item di atas memiliki bukti dan penanggung jawab yang ditetapkan.
 
 ## 4. Urutan Sprint yang Disarankan
 

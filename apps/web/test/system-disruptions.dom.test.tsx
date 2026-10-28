@@ -166,7 +166,7 @@ describe('mounted Admin system-disruption page', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('does not imply an ambiguous POST was absent when review returns an empty page', async () => {
+  it('offers a same-key retry when an ambiguous POST is absent from the paginated list', async () => {
     const networkError = Object.assign(new Error('network unavailable'), {
       status: 0,
       code: 'NETWORK_ERROR',
@@ -197,14 +197,16 @@ describe('mounted Admin system-disruption page', () => {
 
     await clickAndFlush(requireButton(page.container, 'Konfirmasi dan simpan'));
     expect(api.create).toHaveBeenCalledTimes(1);
-    expect(api.create).toHaveBeenCalledWith({
+    const normalizedInput = {
       storeId: null,
-      startsAt: '2026-10-11T09:00:00+07:00',
-      endsAt: '2026-10-11T11:00:00+07:00',
+      startsAt: '2026-10-11T02:00:00.000Z',
+      endsAt: '2026-10-11T04:00:00.000Z',
       reason: 'Pemeliharaan jaringan',
-    });
-    expect(page.container.textContent).toContain('Hasil POST ambigu — pengiriman dikunci');
-    expect(page.container.textContent).toContain('tidak membuktikan record tidak tersimpan');
+    };
+    expect(api.create).toHaveBeenNthCalledWith(1, normalizedInput, expect.any(String));
+    const idempotencyKey = api.create.mock.calls[0]?.[1];
+    expect(page.container.textContent).toContain('Hasil belum diketahui — pengiriman ulang aman');
+    expect(page.container.textContent).toContain('tidak membuktikan POST sebelumnya gagal');
 
     await clickAndFlush(requireButton(page.container, 'Muat ulang daftar · halaman 1'));
     expect(api.list).toHaveBeenCalledTimes(2);
@@ -217,20 +219,28 @@ describe('mounted Admin system-disruption page', () => {
     expect(emptyState?.textContent).toContain(
       'ini bukan bukti bahwa POST gagal atau gangguan tidak tersimpan.',
     );
-    expect(emptyState?.textContent).toContain('Jangan kirim ulang');
+    expect(findButton(page.container, 'Kirim ulang payload yang sama')).not.toBeNull();
     expect(findHeading(page.container, 'Belum ada gangguan tercatat')).toBeNull();
 
     const submit = requireButton(page.container, 'Tinjau pencatatan');
     expect(submit.disabled).toBe(true);
     expect(page.container.querySelector('fieldset')?.disabled).toBe(true);
     await clickAndFlush(submit);
+    expect(page.container.querySelector('dialog')?.hasAttribute('open')).toBe(false);
+    expect(api.create).toHaveBeenCalledTimes(1);
+    await clickAndFlush(requireButton(page.container, 'Kirim ulang payload yang sama'));
+    expect(api.create).toHaveBeenCalledTimes(2);
+    expect(api.create).toHaveBeenNthCalledWith(2, normalizedInput, idempotencyKey);
+    expect(page.container.textContent).toContain('Gangguan berhasil dicatat.');
+    expect(page.container.textContent).not.toContain('Hasil belum diketahui');
+    expect(requireButton(page.container, 'Tinjau pencatatan').disabled).toBe(false);
     const form = page.container.querySelector('form');
     expect(form).not.toBeNull();
     await act(async () => {
       form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     });
     expect(page.container.querySelector('dialog')?.hasAttribute('open')).toBe(false);
-    expect(api.create).toHaveBeenCalledTimes(1);
+    expect(api.create).toHaveBeenCalledTimes(2);
     expect(fetch).not.toHaveBeenCalled();
   });
 });

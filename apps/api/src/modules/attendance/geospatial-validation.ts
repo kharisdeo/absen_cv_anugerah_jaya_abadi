@@ -15,7 +15,7 @@ export type GeospatialAssessment = Readonly<{
   distanceMeters: number | null;
   radiusMeters: number | null;
   accuracyLimitMeters: number | null;
-  result: GeofenceResult;
+  result: GeofenceResult | null;
   repeatedCoordinate: boolean;
 }>;
 

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { DeviceBindingStatus, NetworkStatus, UserRole } from '../../src/generated/prisma/enums.js';
+import { AppError } from '../../src/errors/app-error.js';
 import {
   addUtcMonths,
   AttendanceAttemptService,
@@ -81,10 +82,11 @@ class MemoryAttendanceAttemptRepository implements AttendanceAttemptRepository {
       requestFingerprint: data.requestFingerprint,
       deviceIdHash: 'server-derived-hash',
       receivedAt: RECEIVED_AT,
-      processingStatus: 'RECORDED',
+      processingStatus: data.locationFailureReason ? 'RECEIVED' : 'RECORDED',
       processingErrorCode: null,
-      attendanceId: '00000000-0000-4000-8000-000000000099',
-      attendanceValidationStatus: 'PENDING_VERIFICATION',
+      locationFailureReason: data.locationFailureReason,
+      attendanceId: data.locationFailureReason ? null : '00000000-0000-4000-8000-000000000099',
+      attendanceValidationStatus: data.locationFailureReason ? null : 'PENDING_VERIFICATION',
     };
     this.records.push(record);
     return { record, created: true } as const;
@@ -164,6 +166,32 @@ describe('attendance attempt contract', () => {
     ).toBe(false);
   });
 
+  it('requires a bounded location failure reason only when no fix is available', () => {
+    expect(
+      attendanceAttemptBodySchema.safeParse({
+        ...payload(),
+        location: null,
+        locationFailureReason: 'PERMISSION_DENIED',
+      }).success,
+    ).toBe(true);
+    expect(attendanceAttemptBodySchema.safeParse({ ...payload(), location: null }).success).toBe(
+      false,
+    );
+    expect(
+      attendanceAttemptBodySchema.safeParse({
+        ...payload(),
+        locationFailureReason: 'TIMEOUT',
+      }).success,
+    ).toBe(false);
+    expect(
+      attendanceAttemptBodySchema.safeParse({
+        ...payload(),
+        location: null,
+        locationFailureReason: 'CLIENT_CLAIMS_VALID',
+      }).success,
+    ).toBe(false);
+  });
+
   it('accepts an optional store choice only as a server-validated assignment hint', async () => {
     const { repository, service } = serviceHarness();
     const storeIdHint = '00000000-0000-4000-8000-000000000006';
@@ -218,6 +246,98 @@ describe('attendance attempt contract', () => {
     expect(repository.records).toHaveLength(1);
     expect(repository.createCalls).toHaveLength(1);
     expect(verify).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries watermarking on an exact idempotent attempt and never invokes it for a conflicting replay', async () => {
+    const watermark = vi.fn(async () => {});
+    const { repository, service } = serviceHarness({
+      async verifyPrivateSelfieReference() {
+        return {
+          sizeBytes: 10 * 1024,
+          stagedObjectKey: 'attendance/selfie-staging/watermark',
+          sealedObjectKey: 'attendance/selfie-accepted/watermark',
+        };
+      },
+      applyWatermarkForAttempt: watermark,
+    });
+    const first = await service.createAttempt(principal(), payload(), {
+      requestId: 'watermark-first',
+    });
+    await service.createAttempt(principal(), payload(), { requestId: 'watermark-retry' });
+
+    await expect(
+      service.createAttempt(principal(), payload({ type: 'CHECK_OUT' }), {
+        requestId: 'watermark-conflict',
+      }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect(repository.records).toHaveLength(1);
+    expect(watermark).toHaveBeenNthCalledWith(1, first.attemptId);
+    expect(watermark).toHaveBeenNthCalledWith(2, first.attemptId);
+    expect(watermark).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a persisted receipt retryable when watermark rendering fails', async () => {
+    let failOnce = true;
+    const watermark = vi.fn(async () => {
+      if (failOnce) {
+        failOnce = false;
+        throw new AppError(503, 'SELFIE_WATERMARK_UNAVAILABLE', 'Watermark unavailable.');
+      }
+    });
+    const { repository, service } = serviceHarness({
+      async verifyPrivateSelfieReference() {
+        return {
+          sizeBytes: 10 * 1024,
+          stagedObjectKey: 'attendance/selfie-staging/retry',
+          sealedObjectKey: 'attendance/selfie-accepted/retry',
+        };
+      },
+      applyWatermarkForAttempt: watermark,
+    });
+
+    await expect(
+      service.createAttempt(principal(), payload(), { requestId: 'watermark-failed' }),
+    ).rejects.toMatchObject({ statusCode: 503, code: 'SELFIE_WATERMARK_UNAVAILABLE' });
+    expect(repository.records).toHaveLength(1);
+    const retry = await service.createAttempt(principal(), payload(), {
+      requestId: 'watermark-retry',
+    });
+    expect(retry).toMatchObject({ replayed: true, state: 'RECORDED' });
+    expect(repository.createCalls).toHaveLength(1);
+    expect(watermark).toHaveBeenCalledTimes(2);
+  });
+
+  it('stores a no-fix attempt as RECEIVED without claiming Attendance, and scopes replay', async () => {
+    const { repository, service } = serviceHarness();
+    const noFix = payload({ location: null, locationFailureReason: 'TIMEOUT' });
+
+    const first = await service.createAttempt(principal(), noFix, { requestId: 'gps-fail-1' });
+    const replay = await service.createAttempt(principal(), noFix, { requestId: 'gps-fail-2' });
+
+    expect(first).toMatchObject({
+      state: 'RECEIVED',
+      locationFailureReason: 'TIMEOUT',
+      replayed: false,
+    });
+    expect(first).not.toHaveProperty('attendanceId');
+    expect(first).not.toHaveProperty('validationStatus');
+    expect(replay).toEqual({ ...first, replayed: true });
+    expect(repository.records).toHaveLength(1);
+    expect(repository.createCalls[0]).toMatchObject({
+      latitude: null,
+      longitude: null,
+      accuracyMeters: null,
+      locationFailureReason: 'TIMEOUT',
+    });
+
+    const anotherDevice = {
+      ...principal(),
+      deviceBindingId: '00000000-0000-4000-8000-000000000006',
+    } satisfies AuthPrincipal;
+    await expect(
+      service.createAttempt(anotherDevice, noFix, { requestId: 'gps-fail-foreign-device' }),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'IDEMPOTENCY_KEY_REUSED' });
+    expect(repository.records).toHaveLength(1);
   });
 
   it('accepts an offline queued attempt through the existing immutable receipt path', async () => {

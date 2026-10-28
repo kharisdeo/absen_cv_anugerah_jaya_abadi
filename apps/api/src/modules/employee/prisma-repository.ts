@@ -1,6 +1,6 @@
 import { Prisma, type PrismaClient } from '../../generated/prisma/client.js';
 import { AppError } from '../../errors/app-error.js';
-import { ACCOUNT_IDENTIFIER_LOCK_KEY } from '../account/prisma-repository.js';
+import { acquireAccountIdentifierLock } from '../account/prisma-repository.js';
 import type { EmployeeCreateData, EmployeeRecord, EmployeeRepository } from './index.js';
 
 const employeeSelect = {
@@ -80,9 +80,7 @@ export class PrismaEmployeeRepository implements EmployeeRepository {
   async create(data: EmployeeCreateData): Promise<EmployeeRecord> {
     try {
       return await this.prisma.$transaction(async (tx) => {
-        await tx.$queryRaw(
-          Prisma.sql`SELECT pg_advisory_xact_lock(${ACCOUNT_IDENTIFIER_LOCK_KEY})`,
-        );
+        await acquireAccountIdentifierLock(tx);
         const matchingAccount = await tx.userAccount.findUnique({
           where: { username: data.nik },
           select: { id: true },
@@ -101,9 +99,7 @@ export class PrismaEmployeeRepository implements EmployeeRepository {
   async update(id: string, data: EmployeeUpdateData): Promise<EmployeeRecord | null> {
     try {
       return await this.prisma.$transaction(async (tx) => {
-        await tx.$queryRaw(
-          Prisma.sql`SELECT pg_advisory_xact_lock(${ACCOUNT_IDENTIFIER_LOCK_KEY})`,
-        );
+        await acquireAccountIdentifierLock(tx);
         const before = await tx.employee.findUnique({ where: { id }, select: { nik: true } });
         if (!before) return null;
         if (data.nik !== undefined && data.nik !== before.nik) {

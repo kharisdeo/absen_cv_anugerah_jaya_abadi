@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { UserRole } from '../../src/generated/prisma/enums.js';
 import type { AuditLog, Prisma } from '../../src/generated/prisma/client.js';
@@ -82,6 +82,31 @@ describe('AuditService', () => {
     });
     expect(fake.created[0]).not.toHaveProperty('occurredAt');
     expect(event.occurredAt).toEqual(databaseTime);
+  });
+
+  it('writes an atomic audit event through the supplied Prisma transaction', async () => {
+    const fake = makeFakeRepository();
+    const create = vi.fn(async ({ data }: { data: AuditLogCreateData }) => makeAuditLog(data));
+    const transaction = { auditLog: { create } } as unknown as Prisma.TransactionClient;
+
+    await new AuditService(fake.repository).recordInTransaction(transaction, {
+      actor: { role: UserRole.ADMIN, userAccountId: accountId },
+      action: 'system_disruption.create',
+      entityType: 'system_disruption',
+      entityId: '8b3d9c90-1075-4e40-8ca7-1ad1f4dbdbaa',
+      after: { storeId: null, isActive: true },
+      reason: 'Gangguan sistem',
+    });
+
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        actorUserAccountId: accountId,
+        action: 'system_disruption.create',
+        entityType: 'system_disruption',
+        reason: 'Gangguan sistem',
+      }),
+    });
+    expect(fake.created).toEqual([]);
   });
 
   it('allows system events with a null actor', async () => {

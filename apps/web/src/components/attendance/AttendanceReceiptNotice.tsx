@@ -1,6 +1,12 @@
 import type { AttendanceReceipt } from '../../api/attendance-api.js';
 import './AttendanceReceiptNotice.css';
 
+const LOCATION_FAILURE_LABELS = {
+  PERMISSION_DENIED: 'izin lokasi tidak diberikan',
+  POSITION_UNAVAILABLE: 'perangkat tidak memberikan posisi yang dapat digunakan',
+  TIMEOUT: 'pengambilan lokasi melewati batas waktu',
+} as const;
+
 export function attendanceReceiptTitle(receipt: AttendanceReceipt): string {
   if (!receipt.validationStatus) {
     return receipt.state === 'RECEIVED'
@@ -23,6 +29,9 @@ export function attendanceReceiptTitle(receipt: AttendanceReceipt): string {
 
 export function attendanceReceiptDescription(receipt: AttendanceReceipt): string {
   if (!receipt.validationStatus) {
+    if (receipt.locationFailureReason) {
+      return `Server telah menyimpan receipt percobaan; ${LOCATION_FAILURE_LABELS[receipt.locationFailureReason]}. Status kehadiran belum tersedia dan belum dinyatakan valid.`;
+    }
     return receipt.state === 'RECEIVED'
       ? 'Server telah menerima percobaan ini. Status kehadiran belum tersedia; periksa kembali riwayat absensi.'
       : 'Server telah mencatat percobaan ini, tetapi status kehadiran belum tersedia.';

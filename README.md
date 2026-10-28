@@ -4,6 +4,15 @@ Monorepo for the employee attendance PWA and its REST API. The API foundation an
 first responsive PWA shell are in place; product workflows continue task-by-task in
 [`docs/TODO-implementation-plan.md`](docs/TODO-implementation-plan.md).
 
+## Release readiness
+
+**Not go-live ready (snapshot 2026-10-15).** The current evidence is limited to focused
+local test slices; PostgreSQL/staging, real-browser/device, provider, backup/restore,
+incident ownership, and production deployment gates remain open. Review the
+[`AUD-26 release snapshot`](docs/audit/2026-10-14/AUD-26-RELEASE-STATUS.md) and
+[`audit index`](docs/audit/2026-10-14/README.md) before treating any historical checkpoint
+as current release evidence.
+
 ## Backend foundation
 
 - `apps/api`: Fastify 5 REST API, TypeScript ESM, versioned under `/api/v1`.
@@ -32,7 +41,7 @@ to `postgresql://absen_local:<same-password>@127.0.0.1:5433/absen_local_demo?sch
 Using hexadecimal avoids URL-encoding ambiguity. Keep `.env` uncommitted and leave demo
 passwords empty unless you intend to create demo accounts.
 
-Start and initialize the local database:
+Start the local database and private object storage, then initialize the database:
 
 ```sh
 pnpm db:start
@@ -40,12 +49,14 @@ pnpm db:generate
 pnpm db:migrate:dev
 ```
 
-`db:start` waits for PostgreSQL's healthcheck. Compose pins PostgreSQL 17.11, exposes
-it only on `127.0.0.1:5433` (not standard port 5432), and stores data in the named
-`absen_cv_anugerah_jaya_abadi_local_postgres_data` volume. `pnpm db:stop` stops the
-container without deleting its volume or data. Do not use `docker compose down -v`,
-volume prune/reset, or migration commands against a database other than this local
-demo database.
+`db:start` waits for PostgreSQL and local RustFS, then creates a private bucket.
+RustFS allows browser uploads from the Vite origins. PostgreSQL is exposed only on
+`127.0.0.1:5433` (not standard port 5432); RustFS's S3 API is exposed only on
+`127.0.0.1:9000`. Their data is stored in named local volumes. The RustFS credentials
+in `.env.example` are for loopback-only development; never reuse them outside local
+development. `pnpm db:stop` stops both containers without deleting data. Do not use
+`docker compose down -v`, volume prune/reset, or migration commands against a database
+other than this local demo database.
 
 ### Optional synthetic demo data
 
@@ -94,8 +105,11 @@ verified.
 Regenerate the install icons with `pnpm --filter @absen/web icons:generate` after
 changing the source mark.
 
-The API and Prisma CLI load `.env` from the repository root; values already provided
-by the shell/CI take precedence. Empty optional values can stay blank.
+The API runtime and Prisma CLI load `.env` from the repository root for local
+configuration; values already provided by the shell/CI/deployment environment take
+precedence. Empty optional values can stay blank. In staging and production, provide
+the required settings through the deployment environment or secret manager rather than
+relying on a checked-out `.env` file.
 
 The liveness endpoint reports that the process is responding; it does not claim that
 future database or external services are ready.
@@ -103,33 +117,36 @@ future database or external services are ready.
 Runtime settings are validated at startup. Supported environments are
 `development`, `test`, `staging`, and `production`.
 
-| Variable                   | Default                                                          | Purpose / validation                                                                                                  |
-| -------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `NODE_ENV`                 | `development`                                                    | Runtime mode: `development`, `test`, `staging`, or `production`.                                                      |
-| `HOST`                     | `127.0.0.1` in development/test; `0.0.0.0` in staging/production | API bind interface; explicit `HOST` always takes precedence (set as required by deployment/networking).               |
-| `PORT`                     | `3000`                                                           | TCP port from 1 through 65535.                                                                                        |
-| `LOG_LEVEL`                | `info` (`silent` in test mode)                                   | Pino log level.                                                                                                       |
-| `TIMEZONE`                 | `Asia/Jakarta`                                                   | Only `Asia/Jakarta` is accepted (PRD NFR-07); unset/empty uses this default and other values fail at startup.         |
-| `DATABASE_URL`             | unset                                                            | PostgreSQL URL for the local Compose database/API and Prisma CLI.                                                     |
-| `POSTGRES_PASSWORD`        | unset                                                            | Local Compose database password; keep only in untracked `.env`.                                                       |
-| `SEED_DEMO_DATA`           | `false`                                                          | Demo seed opt-in; must be exactly `true` to write synthetic accounts/data.                                            |
-| `DEMO_*_PASSWORD`          | unset                                                            | Local-only demo role passwords; no defaults are provided.                                                             |
-| `SESSION_SECRET`           | unset                                                            | Optional in development/test/staging. Required in production, at least 32 characters with at least 16 distinct chars. |
-| `STORAGE_ENDPOINT`         | unset                                                            | Optional object-storage endpoint URL.                                                                                 |
-| `STORAGE_BUCKET`           | unset                                                            | Bucket name; required together with access and secret keys when storage is configured.                                |
-| `STORAGE_ACCESS_KEY`       | unset                                                            | Generic object-storage access key; do not commit its value.                                                           |
-| `STORAGE_SECRET_KEY`       | unset                                                            | Generic object-storage secret; do not commit its value.                                                               |
-| `NOTIFICATION_PROVIDER`    | unset                                                            | Provider identifier, intentionally not tied to a vendor.                                                              |
-| `NOTIFICATION_CREDENTIALS` | unset                                                            | Opaque provider-specific credentials; required provider identifier when supplied.                                     |
-| `SELFIE_RETENTION_MONTHS`  | `12`                                                             | Selfie retention default from the PRD; must be a positive integer.                                                    |
-| `FEATURE_FLAGS`            | `{}`                                                             | JSON object mapping feature names to boolean values; defaults to no environment overrides.                            |
+| Variable                   | Default                                                          | Purpose / validation                                                                                          |
+| -------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                 | `development`                                                    | Runtime mode: `development`, `test`, `staging`, or `production`.                                              |
+| `HOST`                     | `127.0.0.1` in development/test; `0.0.0.0` in staging/production | API bind interface; explicit `HOST` always takes precedence (set as required by deployment/networking).       |
+| `PORT`                     | `3000`                                                           | TCP port from 1 through 65535.                                                                                |
+| `LOG_LEVEL`                | `info` (`silent` in test mode)                                   | Pino log level.                                                                                               |
+| `TIMEZONE`                 | `Asia/Jakarta`                                                   | Only `Asia/Jakarta` is accepted (PRD NFR-07); unset/empty uses this default and other values fail at startup. |
+| `DATABASE_URL`             | unset                                                            | PostgreSQL URL for the local Compose database/API and Prisma CLI; required in staging and production.         |
+| `APP_ORIGIN`               | `http://localhost:5173` in development; unset otherwise          | Exact browser origin (no path, query, or credentials); required and HTTPS in staging and production.          |
+| `POSTGRES_PASSWORD`        | unset                                                            | Local Compose database password; keep only in untracked `.env`.                                               |
+| `SEED_DEMO_DATA`           | `false`                                                          | Demo seed opt-in; must be exactly `true` to write synthetic accounts/data.                                    |
+| `DEMO_*_PASSWORD`          | unset                                                            | Local-only demo role passwords; no defaults are provided.                                                     |
+| `SESSION_SECRET`           | unset                                                            | Required in staging/production; at least 32 characters and at least 16 distinct characters.                   |
+| `STORAGE_ENDPOINT`         | `http://127.0.0.1:9000` in local development                     | Local RustFS endpoint; unset for hosted providers with a default endpoint.                                    |
+| `STORAGE_BUCKET`           | `absen-local-private` in local development                       | Private bucket; required with access and secret keys when storage is configured.                              |
+| `STORAGE_ACCESS_KEY`       | `absen_local_demo` in local development                          | Local-only RustFS access key; use a private provider credential in deployment.                                |
+| `STORAGE_SECRET_KEY`       | local placeholder in `.env.example`                              | Local-only RustFS secret; use a private provider credential in deployment.                                    |
+| `NOTIFICATION_PROVIDER`    | unset                                                            | Provider identifier, intentionally not tied to a vendor.                                                      |
+| `NOTIFICATION_CREDENTIALS` | unset                                                            | Opaque provider-specific credentials; required provider identifier when supplied.                             |
+| `SELFIE_RETENTION_MONTHS`  | `12`                                                             | Selfie retention default from the PRD; must be a positive integer.                                            |
+| `FEATURE_FLAGS`            | `{}`                                                             | JSON object mapping feature names to boolean values; defaults to no environment overrides.                    |
 
-The health endpoint and local development do not require database, session, storage, or
-notification secrets. Production startup fails when `SESSION_SECRET` is absent or does
-not meet the strength checks. If any storage setting is provided, bucket, access key,
-and secret key must all be present; the endpoint may be omitted for providers with a
-default endpoint. Notification credentials may be omitted for providers that do not
-need them. Do not put real credentials in `.env.example`, source control, or logs.
+The health endpoint and API process can start without object-storage settings, but selfie attendance cannot be recorded until storage is configured. `pnpm db:start` starts local RustFS for this purpose. Both staging and production startup require a valid PostgreSQL
+`DATABASE_URL`, a `SESSION_SECRET` of at least 32 characters with at least 16 distinct
+characters, and an `APP_ORIGIN` containing only the exact origin and using `https://`.
+The origin must not include a path, query, or embedded credentials. If any storage
+setting is provided, bucket, access key, and secret key must all be present; the
+endpoint may be omitted for providers with a default endpoint. Notification credentials
+may be omitted for providers that do not need them. Do not put real credentials in
+`.env.example`, source control, or logs.
 
 ## Quality commands
 

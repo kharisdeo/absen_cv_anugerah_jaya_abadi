@@ -38,6 +38,7 @@ const data: CreateAttendanceAttemptData = {
   latitude: -6.2,
   longitude: 106.8,
   accuracyMeters: 12.5,
+  locationFailureReason: null,
   selfieReferenceHash: 'b'.repeat(64),
   selfieStagedObjectKey: 'attendance/selfie-staging/source',
   selfieSealedObjectKey: 'attendance/selfie-accepted/sealed',
@@ -119,6 +120,7 @@ function setup(
     receivedAt: options.receivedAt ?? receivedAt,
     processingStatus: 'RECEIVED',
     processingErrorCode: null as string | null,
+    locationFailureReason: null as 'PERMISSION_DENIED' | 'POSITION_UNAVAILABLE' | 'TIMEOUT' | null,
     attendance: null as null | { id: string; validationStatus: AttendanceValidationStatus },
   };
   let createCount = 0;
@@ -180,7 +182,10 @@ function setup(
     }),
     attendanceAttempt: {
       create: vi.fn(async (args: unknown) => {
-        void args;
+        const attemptData = (
+          args as { data: { locationFailureReason?: typeof row.locationFailureReason } }
+        ).data;
+        row.locationFailureReason = attemptData.locationFailureReason ?? null;
         createCount += 1;
         if (options.duplicateOnCreate && createCount > 1) throw uniqueConstraintError();
         return row;
@@ -832,6 +837,50 @@ describe('PrismaAttendanceAttemptRepository', () => {
         }),
       }),
     );
+  });
+
+  it('stores no-fix evidence as RECEIVED and does not create Attendance or LocationProof', async () => {
+    const { repository, tx } = setup();
+    const noFixData: CreateAttendanceAttemptData = {
+      ...data,
+      latitude: null,
+      longitude: null,
+      accuracyMeters: null,
+      locationFailureReason: 'TIMEOUT',
+    };
+
+    const result = await repository.createAttempt(noFixData);
+
+    expect(result).toMatchObject({
+      created: true,
+      record: {
+        processingStatus: 'RECEIVED',
+        locationFailureReason: 'TIMEOUT',
+        attendanceId: null,
+        attendanceValidationStatus: null,
+      },
+    });
+    expect(tx.attendanceAttempt.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          latitude: null,
+          longitude: null,
+          accuracyMeters: null,
+          locationFailureReason: 'TIMEOUT',
+          geofenceResult: null,
+          repeatedCoordinate: false,
+        }),
+      }),
+    );
+    expect(tx.selfieUploadIntent.updateMany).toHaveBeenCalledTimes(1);
+    expect(tx.attendance.create).not.toHaveBeenCalled();
+    expect(tx.locationProof.create).not.toHaveBeenCalled();
+    expect(tx.selfieCapture.create).not.toHaveBeenCalled();
+    expect(tx.notification.createMany).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).toHaveBeenCalledTimes(1);
+    const executedQueries = vi.mocked(tx.$queryRaw).mock.calls.map(([query]) => query.sql);
+    expect(executedQueries.some((sql) => sql.includes('FROM employee_stores'))).toBe(false);
+    expect(executedQueries.some((sql) => sql.includes('FROM shift_assignments AS sa'))).toBe(false);
   });
 
   it('does not attribute an unassigned client store hint and still keeps the raw attempt', async () => {

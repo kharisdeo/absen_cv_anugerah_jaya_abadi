@@ -10,7 +10,7 @@ import { SessionProvider, USER_ROLES, useSession, type AuthUser } from '../auth/
 import { AppShell } from '../components/AppShell.js';
 import { PwaControls } from '../components/PwaControls.js';
 import { ConsentOnboardingStep, LoginPage, PasswordOnboardingStep } from '../pages/LoginPage.js';
-import { AccessDeniedPage, SessionStatusPage } from '../pages/StatusPages.js';
+import { AccessDeniedPage, DevicePendingPage, SessionStatusPage } from '../pages/StatusPages.js';
 import { RolePage } from './RolePage.js';
 import { ROLE_BASE_PATHS, ROLE_NAVIGATION } from './role-navigation.js';
 
@@ -41,12 +41,7 @@ function SignedInStatus({ user, decision }: Readonly<{ user: AuthUser; decision:
     );
   }
   if (decision === 'device-pending') {
-    return (
-      <SessionStatusPage
-        title="Perangkat menunggu persetujuan"
-        message="Admin perlu menyetujui perangkat ini sebelum data kerja dapat diakses."
-      />
-    );
+    return <DevicePendingPage />;
   }
   return (
     <SessionStatusPage

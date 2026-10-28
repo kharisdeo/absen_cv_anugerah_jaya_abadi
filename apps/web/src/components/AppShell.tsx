@@ -1,7 +1,12 @@
-import { Link, NavLink, Outlet } from 'react-router-dom';
+import { useState } from 'react';
+import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 
-import type { AuthUser, UserRole } from '../auth/session.js';
+import { logout } from '../auth/auth-api.js';
+import { useSession, type AuthUser, type UserRole } from '../auth/session.js';
 import { ROLE_BASE_PATHS, ROLE_NAVIGATION } from '../app/role-navigation.js';
+import { toUserErrorMessage } from '../api/error-message.js';
+import { Alert } from './ui/Alert.js';
+import { Button } from './ui/Button.js';
 
 const roleLabel: Record<UserRole, string> = {
   EMPLOYEE: 'Karyawan',
@@ -11,6 +16,24 @@ const roleLabel: Record<UserRole, string> = {
 
 export function AppShell({ user }: Readonly<{ user: AuthUser }>) {
   const items = ROLE_NAVIGATION[user.role];
+  const navigate = useNavigate();
+  const { invalidateSession } = useSession();
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
+
+  async function handleLogout(): Promise<void> {
+    setIsLoggingOut(true);
+    setLogoutError(null);
+    try {
+      await logout();
+      invalidateSession();
+      navigate('/login', { replace: true });
+    } catch (error: unknown) {
+      setLogoutError(toUserErrorMessage(error));
+    } finally {
+      setIsLoggingOut(false);
+    }
+  }
 
   return (
     <div className="app-frame">
@@ -65,9 +88,22 @@ export function AppShell({ user }: Readonly<{ user: AuthUser }>) {
               <strong>{user.username}</strong>
               <span>{roleLabel[user.role]}</span>
             </span>
+            <Button
+              aria-label="Keluar"
+              loading={isLoggingOut}
+              onClick={() => void handleLogout()}
+              variant="secondary"
+            >
+              Keluar
+            </Button>
           </div>
         </header>
         <main id="main-content" className="main-content" tabIndex={-1}>
+          {logoutError && (
+            <Alert title="Logout belum berhasil" tone="danger">
+              {logoutError}
+            </Alert>
+          )}
           <Outlet />
         </main>
         <footer className="app-footer">

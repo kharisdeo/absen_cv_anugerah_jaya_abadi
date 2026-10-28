@@ -106,6 +106,7 @@ export class PrismaSelfieUploadIntentRepository implements SelfieUploadIntentRep
     objectKey: string;
     contentType: string;
     retentionExpiresAt: Date;
+    watermarkApplied: boolean;
   }> | null> {
     const row = await this.prisma.selfieUploadIntent.findFirst({
       where: {
@@ -135,15 +136,228 @@ export class PrismaSelfieUploadIntentRepository implements SelfieUploadIntentRep
               },
             }),
       },
-      select: { objectKey: true, contentType: true, retentionExpiresAt: true },
+      select: {
+        objectKey: true,
+        watermarkedObjectKey: true,
+        watermarkApplied: true,
+        contentType: true,
+        retentionExpiresAt: true,
+      },
     });
     return row?.objectKey && row.retentionExpiresAt
       ? {
-          objectKey: row.objectKey,
-          contentType: row.contentType,
+          objectKey:
+            row.watermarkApplied && row.watermarkedObjectKey
+              ? row.watermarkedObjectKey
+              : row.objectKey,
+          contentType:
+            row.watermarkApplied && row.watermarkedObjectKey ? 'image/jpeg' : row.contentType,
           retentionExpiresAt: row.retentionExpiresAt,
+          watermarkApplied: row.watermarkApplied && row.watermarkedObjectKey !== null,
         }
       : null;
+  }
+
+  async reserveWatermarkedObjectForAttempt(input: {
+    attemptId: string;
+    candidateObjectKey: string;
+    now: Date;
+  }) {
+    return this.prisma.$transaction(async (transaction) => {
+      let row = await transaction.selfieUploadIntent.findFirst({
+        where: {
+          attachedAttemptId: input.attemptId,
+          status: 'ATTACHED',
+          objectKey: { not: null },
+          deletedAt: null,
+          retentionExpiresAt: { gt: input.now },
+        },
+        select: {
+          referenceHash: true,
+          objectKey: true,
+          watermarkedObjectKey: true,
+          watermarkApplied: true,
+          contentType: true,
+          declaredSizeBytes: true,
+          retentionExpiresAt: true,
+          watermarkMetadata: true,
+        },
+      });
+      if (!row?.objectKey || !row.retentionExpiresAt) return null;
+
+      if (!row.watermarkedObjectKey) {
+        await transaction.selfieUploadIntent.updateMany({
+          where: {
+            referenceHash: row.referenceHash,
+            attachedAttemptId: input.attemptId,
+            objectKey: row.objectKey,
+            watermarkedObjectKey: null,
+            watermarkApplied: false,
+            deletedAt: null,
+            retentionExpiresAt: { gt: input.now },
+          },
+          data: { watermarkedObjectKey: input.candidateObjectKey },
+        });
+        row = await transaction.selfieUploadIntent.findFirst({
+          where: {
+            attachedAttemptId: input.attemptId,
+            status: 'ATTACHED',
+            deletedAt: null,
+            retentionExpiresAt: { gt: input.now },
+          },
+          select: {
+            referenceHash: true,
+            objectKey: true,
+            watermarkedObjectKey: true,
+            watermarkApplied: true,
+            contentType: true,
+            declaredSizeBytes: true,
+            retentionExpiresAt: true,
+            watermarkMetadata: true,
+          },
+        });
+      }
+      if (!row?.objectKey || !row.watermarkedObjectKey || !row.retentionExpiresAt) return null;
+      return {
+        referenceHash: row.referenceHash,
+        objectKey: row.objectKey,
+        watermarkedObjectKey: row.watermarkedObjectKey,
+        watermarkApplied: row.watermarkApplied,
+        contentType: row.contentType,
+        sizeBytes: row.declaredSizeBytes,
+        retentionExpiresAt: row.retentionExpiresAt,
+        watermarkMetadata: row.watermarkMetadata,
+      };
+    });
+  }
+
+  async markWatermarkApplied(input: {
+    attemptId: string;
+    referenceHash: string;
+    originalObjectKey: string;
+    watermarkedObjectKey: string;
+    sizeBytes: number;
+    now: Date;
+  }) {
+    return this.prisma.$transaction(async (transaction) => {
+      const result = await transaction.selfieUploadIntent.updateMany({
+        where: {
+          referenceHash: input.referenceHash,
+          attachedAttemptId: input.attemptId,
+          status: 'ATTACHED',
+          objectKey: input.originalObjectKey,
+          watermarkedObjectKey: input.watermarkedObjectKey,
+          watermarkApplied: false,
+          deletedAt: null,
+          retentionExpiresAt: { gt: input.now },
+        },
+        data: { watermarkApplied: true, watermarkedSizeBytes: input.sizeBytes },
+      });
+      if (result.count === 0) {
+        const existing = await transaction.selfieUploadIntent.findFirst({
+          where: {
+            referenceHash: input.referenceHash,
+            attachedAttemptId: input.attemptId,
+            watermarkedObjectKey: input.watermarkedObjectKey,
+            watermarkApplied: true,
+            watermarkedSizeBytes: input.sizeBytes,
+            deletedAt: null,
+            retentionExpiresAt: { gt: input.now },
+          },
+          select: { referenceHash: true },
+        });
+        if (!existing) return false;
+      }
+
+      await transaction.selfieCapture.updateMany({
+        where: {
+          objectKey: input.originalObjectKey,
+          deletedAt: null,
+          retentionExpiresAt: { gt: input.now },
+          attendance: { is: { sourceAttemptId: input.attemptId } },
+        },
+        data: { watermarkApplied: true },
+      });
+      return true;
+    });
+  }
+
+  async listPendingWatermarkAttempts(input: { now: Date; take: number }) {
+    const rows = await this.prisma.selfieUploadIntent.findMany({
+      where: {
+        status: 'ATTACHED',
+        attachedAttemptId: { not: null },
+        objectKey: { not: null },
+        watermarkApplied: false,
+        deletedAt: null,
+        retentionExpiresAt: { gt: input.now },
+      },
+      orderBy: [{ createdAt: 'asc' }, { referenceHash: 'asc' }],
+      take: input.take,
+      select: { attachedAttemptId: true },
+    });
+    return rows.flatMap((row) => (row.attachedAttemptId ? [row.attachedAttemptId] : []));
+  }
+
+  async previewRetentionCandidates(input: { now: Date; take: number }) {
+    if (!Number.isInteger(input.take) || input.take < 1 || input.take > 500) {
+      throw new RangeError('Retention preview batch size must be between 1 and 500.');
+    }
+    const [watermarks, attachedStaging, expiredAttached, expiredPending] = await Promise.all([
+      this.prisma.selfieUploadIntent.findMany({
+        where: {
+          status: 'ATTACHED',
+          attachedAttemptId: { not: null },
+          objectKey: { not: null },
+          watermarkApplied: false,
+          deletedAt: null,
+          retentionExpiresAt: { gt: input.now },
+        },
+        orderBy: [{ createdAt: 'asc' }, { referenceHash: 'asc' }],
+        take: input.take,
+        select: { attachedAttemptId: true },
+      }),
+      this.prisma.selfieUploadIntent.findMany({
+        where: { status: 'ATTACHED', stagingObjectKey: { not: null } },
+        orderBy: [{ createdAt: 'asc' }, { referenceHash: 'asc' }],
+        take: input.take,
+        select: { referenceHash: true },
+      }),
+      this.prisma.selfieUploadIntent.findMany({
+        where: {
+          status: 'ATTACHED',
+          objectKey: { not: null },
+          deletedAt: null,
+          retentionExpiresAt: { lte: input.now },
+        },
+        orderBy: [{ retentionExpiresAt: 'asc' }, { referenceHash: 'asc' }],
+        take: input.take,
+        select: { referenceHash: true },
+      }),
+      this.prisma.selfieUploadIntent.findMany({
+        where: {
+          status: 'PENDING',
+          objectKey: { not: null },
+          sealedObjectKey: { not: null },
+          expiresAt: { lte: input.now },
+        },
+        orderBy: [{ expiresAt: 'asc' }, { referenceHash: 'asc' }],
+        take: input.take,
+        select: { referenceHash: true },
+      }),
+    ]);
+    return {
+      watermarkCandidates: watermarks.length,
+      attachedStagingCandidates: attachedStaging.length,
+      expiredAttachedCandidates: expiredAttached.length,
+      expiredPendingCandidates: expiredPending.length,
+      batchLimitHit: {
+        watermark: watermarks.length === input.take,
+        attachedStaging: attachedStaging.length === input.take,
+        expiredAttached: expiredAttached.length === input.take,
+        expiredPending: expiredPending.length === input.take,
+      },
+    };
   }
 
   async listAttachedStaging(input: { take: number }) {
@@ -180,14 +394,30 @@ export class PrismaSelfieUploadIntentRepository implements SelfieUploadIntentRep
       },
       orderBy: [{ retentionExpiresAt: 'asc' }, { referenceHash: 'asc' }],
       take: input.take,
-      select: { referenceHash: true, objectKey: true, attachedAttemptId: true },
+      select: {
+        referenceHash: true,
+        objectKey: true,
+        watermarkedObjectKey: true,
+        attachedAttemptId: true,
+      },
     });
-    return rows.flatMap((row) => (row.objectKey ? [{ ...row, objectKey: row.objectKey }] : []));
+    return rows.flatMap((row) =>
+      row.objectKey
+        ? [
+            {
+              ...row,
+              objectKey: row.objectKey,
+              watermarkedObjectKey: row.watermarkedObjectKey ?? null,
+            },
+          ]
+        : [],
+    );
   }
 
   async markAttachedObjectPurged(input: {
     referenceHash: string;
     objectKey: string;
+    watermarkedObjectKey: string | null;
     attachedAttemptId: string | null;
     deletedAt: Date;
   }): Promise<boolean> {
@@ -197,11 +427,18 @@ export class PrismaSelfieUploadIntentRepository implements SelfieUploadIntentRep
           referenceHash: input.referenceHash,
           status: 'ATTACHED',
           objectKey: input.objectKey,
+          watermarkedObjectKey: input.watermarkedObjectKey,
           attachedAttemptId: input.attachedAttemptId,
           deletedAt: null,
           retentionExpiresAt: { lte: input.deletedAt },
         },
-        data: { objectKey: null, deletedAt: input.deletedAt },
+        data: {
+          objectKey: null,
+          watermarkedObjectKey: null,
+          watermarkedSizeBytes: null,
+          watermarkApplied: false,
+          deletedAt: input.deletedAt,
+        },
       });
       if (result.count !== 1) return false;
 

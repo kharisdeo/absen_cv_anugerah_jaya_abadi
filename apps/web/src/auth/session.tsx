@@ -36,6 +36,7 @@ export type SessionState =
 type SessionContextValue = Readonly<{
   session: SessionState;
   refreshSession: () => Promise<SessionState>;
+  invalidateSession: () => void;
 }>;
 const SessionContext = createContext<SessionContextValue | null>(null);
 
@@ -98,6 +99,12 @@ export function SessionProvider({ children }: Readonly<{ children: ReactNode }>)
     return next;
   }, []);
 
+  const invalidateSession = useCallback((): void => {
+    // Prevent an older in-flight /auth/me response from restoring the revoked session.
+    requestVersion.current += 1;
+    setSession({ status: 'unauthenticated' });
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
     const version = ++requestVersion.current;
@@ -110,7 +117,10 @@ export function SessionProvider({ children }: Readonly<{ children: ReactNode }>)
     };
   }, []);
 
-  const value = useMemo(() => ({ session, refreshSession }), [refreshSession, session]);
+  const value = useMemo(
+    () => ({ session, refreshSession, invalidateSession }),
+    [invalidateSession, refreshSession, session],
+  );
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
 

@@ -131,6 +131,15 @@ export function AdminSystemDisruptionsPage() {
     }
   }
 
+  async function retryCreate() {
+    const created = await model.retryUncertainCreate();
+    if (created) {
+      setDraft(createEmptySystemDisruptionDraft());
+      setErrors({});
+      setPendingInput(null);
+    }
+  }
+
   const availableStores = snapshot.stores;
   const periodStart = pendingInput ? formatWibDateTime(pendingInput.startsAt) : '';
   const periodEnd = pendingInput ? formatWibDateTime(pendingInput.endsAt) : '';
@@ -157,10 +166,10 @@ export function AdminSystemDisruptionsPage() {
 
       {snapshot.createNotice && <Alert tone="success">{snapshot.createNotice}</Alert>}
       {snapshot.createError !== null && snapshot.submissionOutcomeUncertain && (
-        <Alert tone="danger" title="Hasil POST ambigu — pengiriman dikunci">
-          {toUserErrorMessage(snapshot.createError)} Server mungkin sudah menyimpan gangguan. POST
-          tidak idempotent, jadi pengiriman ulang dari halaman ini dikunci permanen, termasuk bila
-          record tidak terlihat di daftar.
+        <Alert tone="danger" title="Hasil belum diketahui — pengiriman ulang aman">
+          {toUserErrorMessage(snapshot.createError)} Server mungkin sudah menyimpan gangguan. Coba
+          ulang payload yang sama untuk memakai kunci yang sama dan menerima record yang sama bila
+          penyimpanan sebelumnya berhasil.
         </Alert>
       )}
       {snapshot.createError !== null && !snapshot.submissionOutcomeUncertain && (
@@ -174,10 +183,17 @@ export function AdminSystemDisruptionsPage() {
         <section className="system-disruptions-panel" aria-labelledby={`${formId}-review-title`}>
           <h2 id={`${formId}-review-title`}>Periksa hasil pengiriman</h2>
           <p className="system-disruption-help">
-            Tombol di bawah membuka scope seluruh toko pada halaman pertama. Daftar memakai paginasi
-            tanpa snapshot konsisten, jadi pemeriksaan ini tidak membuktikan record tidak tersimpan
-            dan tidak akan membuka kembali pengiriman POST.
+            Pengiriman ulang identik aman karena memakai kunci idempotency yang sama. Pemeriksaan
+            daftar tetap berguna, tetapi hasil kosong tidak membuktikan POST sebelumnya gagal karena
+            daftar berpaginasi tanpa snapshot konsisten.
           </p>
+          <Button
+            disabled={snapshot.submitting}
+            loading={snapshot.submitting}
+            onClick={() => void retryCreate()}
+          >
+            Kirim ulang payload yang sama
+          </Button>
           <Button
             disabled={snapshot.status === 'loading'}
             loading={snapshot.status === 'loading'}
@@ -187,8 +203,8 @@ export function AdminSystemDisruptionsPage() {
             Muat ulang daftar · halaman 1
           </Button>
           <p className="system-disruption-help">
-            Jika hasil tetap tidak jelas, eskalasikan ke pengelola sistem untuk pemeriksaan audit
-            dan database secara manual. Jangan POST ulang dari halaman ini.
+            Form dikunci sampai hasil ini dipastikan dengan retry ber-key sama. Setelah berhasil,
+            Anda dapat membuat gangguan lain dengan payload dan kunci baru.
           </p>
         </section>
       )}
@@ -207,7 +223,7 @@ export function AdminSystemDisruptionsPage() {
           <form className="system-disruption-form" noValidate onSubmit={submitForConfirmation}>
             <fieldset
               className="system-disruption-fieldset"
-              disabled={snapshot.submissionOutcomeUncertain}
+              disabled={snapshot.submitting || snapshot.submissionOutcomeUncertain}
             >
               <div className="system-disruption-field">
                 <label htmlFor={`${formId}-store`}>Cakupan gangguan</label>
@@ -327,7 +343,7 @@ export function AdminSystemDisruptionsPage() {
               }
               description={
                 snapshot.submissionOutcomeUncertain
-                  ? 'Hasil yang dimuat saat ini kosong. Karena daftar berpaginasi tanpa snapshot konsisten, ini bukan bukti bahwa POST gagal atau gangguan tidak tersimpan. Jangan kirim ulang; hasil tetap perlu direkonsiliasi manual.'
+                  ? 'Hasil yang dimuat saat ini kosong. Karena daftar berpaginasi tanpa snapshot konsisten, ini bukan bukti bahwa POST gagal atau gangguan tidak tersimpan. Retry payload identik memakai key yang sama; payload berbeda membuat pencatatan baru.'
                   : 'Pencatatan baru akan muncul di sini setelah disimpan oleh Admin.'
               }
             />
@@ -391,9 +407,9 @@ export function AdminSystemDisruptionsPage() {
               </div>
             </dl>
             <Alert tone="warning">
-              Jika server timeout, record mungkin sudah tersimpan. Hasil ambigu akan mengunci POST
-              permanen; daftar hanya untuk pemeriksaan dan hasil yang belum jelas harus
-              direkonsiliasi manual.
+              Jika server timeout, record mungkin sudah tersimpan. Payload identik dapat dikirim
+              ulang dengan kunci yang sama; perubahan payload menghasilkan kunci baru dan dianggap
+              pencatatan terpisah.
             </Alert>
             <div className="system-disruption-form__actions">
               <Button

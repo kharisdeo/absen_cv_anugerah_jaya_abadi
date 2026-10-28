@@ -123,7 +123,7 @@ Aturan akses selalu diperiksa di server. Karyawan tidak dapat melihat foto, loka
 
 ### Internet terputus
 
-PWA yang sudah tersimpan tetap dapat dibuka. Selfie, GPS, dan waktu perangkat disimpan terenkripsi di HP sebagai `Absen tertunda`, dengan kode bukti. Background sync mengirim data saat online. Jika selisih waktu perangkat dengan server > 5 menit, jam diubah manual, atau data terkirim > 24 jam, status menjadi `Perlu verifikasi`; jika wajar dan GPS valid, status `Valid (offline)`. Absen tertunda tidak dapat diedit/dihapus karyawan.
+PWA yang sudah tersimpan tetap dapat dibuka. Selfie, GPS, dan waktu perangkat disimpan terenkripsi di HP sebagai `Absen tertunda`, dengan kode bukti. Background sync mengirim data saat online. Waktu receipt dari server tetap dicatat sebagai waktu server resmi; `clientRecordedAt` hanya evidence perangkat dan tidak membuktikan sendiri kapan capture terjadi. Jika capture pada tanggal D baru tersinkron pada D+1, tanggal capture hanya menjadi kandidat tanggal kerja (`candidateWorkDate`) dan wajib ditinjau reviewer sebelum atribusi tanggal/shift difinalkan. Kandidat tidak otomatis menjadi `workDate` final dan tidak boleh membuat absensi berstatus `Valid`. Selisih waktu > 5 menit, perubahan jam manual, atau sinkronisasi > 24 jam juga mengharuskan verifikasi; selama bukti liveness belum diverifikasi server, semua absensi offline tetap `Perlu verifikasi`. Karyawan tidak dapat mengedit/menghapus antrean tertunda. Penanganan kandidat yang tidak masuk akal atau tidak memiliki shift cocok masih memerlukan keputusan produk sebelum implementasi.
 
 ### Perangkat rusak atau kamera error
 

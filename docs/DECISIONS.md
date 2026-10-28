@@ -572,8 +572,11 @@ runtime yang dipakai saat fondasi dibuat adalah Node.js `24.19.0`.
   pending/expired/owner-device mismatch tidak dapat
   dikonsumsi. Signed staging URL yang tersisa tidak dapat mengubah salinan accepted.
 - Metadata watermark yang disimpan adalah nama employee dari database, waktu receipt
-  server, latitude, dan longitude. Tidak ada klaim bahwa teks sudah dibakar secara visual ke
-  pixel gambar; `watermarkApplied` tetap false sampai pipeline rendering terpisah disetujui.
+  server, latitude/longitude atau label lokasi unavailable. AUD-09 menambahkan derivative JPEG
+  privat melalui Sharp; original accepted tidak diubah, read URL hanya menunjuk derivative,
+  dan `watermarkApplied` baru true setelah rendering, object write, serta transaksi status sukses.
+  Worker retention juga melakukan backfill derivative untuk selfie terlampir yang belum
+  di-watermark sebelum menghapus foto kedaluwarsa. Ini tetap bukan hasil liveness verification.
   MIME dan signature tidak membuktikan secara kriptografis bahwa sumber foto adalah stream
   kamera; frontend wajib tetap hanya menyediakan camera capture, bukan file picker.
 - Signed GET pada route legacy Admin tetap hanya tersedia untuk Admin melalui
@@ -589,6 +592,9 @@ runtime yang dipakai saat fondasi dibuat adalah Node.js `24.19.0`.
   sehingga purge tidak dapat berlomba menghapus object dari attempt yang sedang dibuat.
   Scheduler produksi belum dipilih; deployment wajib memasang jadwal harian dan
   memantau exit code non-zero sebelum fitur dinyatakan siap produksi.
+- Implementasi lokal AUD-09 belum membuktikan migration/database race pada PostgreSQL disposable
+  atau perilaku object storage provider nyata. Docker image PostgreSQL tidak berhasil selesai
+  dipersiapkan pada sesi audit; tidak ada database proyek atau provider yang disentuh.
 
 ## Keputusan BE-016 — aturan check-in/check-out
 
@@ -644,6 +650,36 @@ runtime yang dipakai saat fondasi dibuat adalah Node.js `24.19.0`.
 - SLA 24 jam hanya menurunkan `dueAt` dan indikator `overdue`; tidak ada perubahan status/waktu
   otomatis. Migrasi hanya divalidasi lewat Prisma pada environment ini dan belum diterapkan ke DB.
 
+## Keputusan implementasi AUD-05 — attempt tanpa GPS fix
+
+- Request absensi menerima `location: null` hanya bersama failure reason terbatas:
+  `PERMISSION_DENIED`, `POSITION_UNAVAILABLE`, atau `TIMEOUT`. Failure reason adalah
+  laporan client yang tidak dipercaya sebagai verdict dan tidak dapat menentukan status
+  kehadiran.
+- Koordinat, akurasi, snapshot geofence, dan relasi store tetap `NULL` bila tidak ada fix;
+  sistem tidak mengisi `0,0`. Selfie tetap melewati intent private, diperiksa owner/device,
+  disegel, lalu ditautkan ke `AttendanceAttempt` dengan idempotency/fingerprint yang sama
+  seperti attempt biasa.
+- Attempt no-fix berhenti sebagai `RECEIVED`; `Attendance` dan `LocationProof` tidak dibuat
+  karena tidak ada bukti lokasi. Receipt tidak mengandung `attendanceId` atau
+  `validationStatus`. Guard daily-status mengenali attempt `RECEIVED` pada jendela shift agar
+  sinkronisasi GPS gagal tidak otomatis membuat `ABSENT`.
+- Batas workflow: halaman/endpoint verifikasi yang ada membaca `Attendance`, bukan raw
+  `AttendanceAttempt`. Karena itu selfie no-fix sudah tersegel dan terikat pada receipt, tetapi
+  belum muncul sebagai item review yang dapat diputuskan Admin/Supervisor. Receipt tidak boleh
+  dipresentasikan sebagai `PENDING_VERIFICATION` pada domain Attendance; jalur review attempt
+  no-fix tetap pekerjaan terpisah.
+- Fix yang ada tetapi akurasinya buruk tetap disimpan apa adanya dan dinilai server melalui
+  geofence; ia bukan alasan untuk menghilangkan koordinat terbaik. Status final `VALID` tetap
+  memerlukan seluruh gate server yang sudah ada.
+- Tidak ada perubahan pada upload kamera langsung, owner scope, atau replay: attempt yang
+  sama hanya direplay bila actor, binding device, idempotency key, dan fingerprint cocok.
+- Verifikasi lokal AUD-05: API terkait 105 tes dan web terkait 25 tes lulus; Prisma
+  memvalidasi schema; seluruh 13 migrasi diterapkan pada PostgreSQL 17 disposable. Regression
+  PostgreSQL membuktikan attempt/selfie no-fix tersimpan, replay tetap owner-scoped, tidak ada
+  `Attendance`/`LocationProof`/`SelfieCapture`, dan daily-status mengembalikan `blocked` alih-alih
+  membuat `ABSENT`. Ini bukan pengujian provider object-storage atau browser/perangkat produksi.
+
 ## Keputusan implementasi BE-018 — offline sync
 
 - Endpoint yang sama menerima antrean offline setelah perangkat kembali tersambung. Selfie tetap
@@ -670,18 +706,34 @@ runtime yang dipakai saat fondasi dibuat adalah Node.js `24.19.0`.
   untuk audit. `Attendance.serverTime` tetap database receipt; `deviceTime` serta waktu capture
   selfie/lokasi mempertahankan timestamp perangkat. Tidak ada route edit/delete bagi Employee dan
   tidak ada status enum baru.
-- Business date/shift tetap ditentukan berdasarkan WIB dari server receipt (`row.receivedAt`),
-  konsisten dengan BE-016; timestamp perangkat hanya evidence dan tidak pernah menjadi fallback
-  shift. Queue yang melintasi tengah malam WIB dapat masuk ke work date/shift tanggal receipt atau
-  menjadi `RULE_REJECTED` jika tanggal tersebut non-working/tidak memiliki assignment, walaupun
-  device time menunjukkan tanggal sebelumnya. Mengalihkan atribusi ke device date memerlukan
-  keputusan bisnis dan mekanisme verifikasi waktu yang tepercaya; implementasi ini tidak
-  menyimpulkan bahwa device time benar.
+- Pada implementasi saat keputusan ini ditulis, business date/shift masih ditentukan berdasarkan
+  WIB dari server receipt (`row.receivedAt`), dan belum memenuhi klarifikasi produk AUD-06 di bawah.
+  Jangan menganggap perilaku existing tersebut sebagai keputusan final untuk antrean D→D+1.
 - Implementasi dan unit/repository/route tests BE-018 tersedia lokal dengan gate liveness fail-closed.
-  PostgreSQL integration dan penerapan migrasi tidak dapat dijalankan karena `DATABASE_URL` belum
-  tersedia dan Docker daemon tidak aktif. Offline auto-`VALID` tetap tertahan sampai server dapat
-  memverifikasi liveness; atribusi business date lintas tengah malam juga menunggu keputusan bisnis
-  jika perusahaan menghendaki tanggal capture alih-alih receipt.
+  Pada checkpoint awal BE-018, PostgreSQL integration belum dijalankan. AUD-05 kemudian menjalankan
+  regression PostgreSQL disposable untuk no-fix receipt/ABSENT, tetapi cakupan itu tidak membuktikan
+  matriks lengkap BE-018/AUD-06. Offline auto-`VALID` tetap tertahan sampai server dapat
+  memverifikasi liveness.
+
+## Keputusan produk AUD-06 — kandidat tanggal capture offline
+
+- Dikonfirmasi pengguna pada 2026-10-15: bila absensi offline ditangkap pada tanggal D lalu baru
+  tersinkron pada D+1, tanggal capture menjadi **kandidat tanggal kerja** dan wajib ditinjau; tanggal
+  capture tidak langsung menjadi `workDate` final.
+- `AttendanceAttempt.receivedAt`/`Attendance.serverTime` tetap waktu receipt server resmi dan tidak
+  boleh ditimpa oleh waktu perangkat. `clientRecordedAt` tetap evidence yang tidak tepercaya; ia
+  boleh membantu reviewer mengevaluasi kandidat, tetapi tidak menjadi otoritas waktu atau dasar
+  tunggal status `VALID`.
+- Sebelum reviewer berwenang menyelesaikan atribusi, jangan merekonsiliasi kandidat ke daily
+  attendance sebagai hasil final. Seluruh absensi offline tetap `PENDING_VERIFICATION`; flag
+  liveness dari client tidak membuka status `VALID`.
+- Belum diputuskan apakah kandidat dengan tanggal tidak masuk akal atau tanpa shift/assignment cocok
+  harus tetap disimpan pada antrean review atau ditolak dan diarahkan ke pengajuan koreksi. Jangan
+  mengunci behavior implementasi untuk kasus tersebut sebelum keputusan produk tersedia.
+- Implementasi saat ini memakai tanggal WIB receipt dan jalur review yang ada hanya menampilkan
+  `Attendance`, bukan raw `AttendanceAttempt` tanpa Attendance. Maka penerapan keputusan ini
+  membutuhkan jalur review raw attempt atau desain proses setara; keputusan tersebut bukan klaim
+  bahwa fitur review itu sudah tersedia.
 
 ## Keputusan implementasi BE-024 — dashboard, metrik waktu, dan notifications
 

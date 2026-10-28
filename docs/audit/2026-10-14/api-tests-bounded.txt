@@ -1,0 +1,13 @@
+
+ RUN  v5.0.3 C:/Users/khari/Downloads/absen_cv_anugerah_jaya_abadi/apps/api
+
+
+ Test Files  58 passed (58)
+      Tests  514 passed (514)
+   Start at  23:32:21
+   Duration  18.41s (import 61%, tests 30%, transform 7%, worker 2%)
+
+     Import  142 modules were evaluated 198 times · 14.61s total, 61% of tracked time
+             ~1.51s faster with isolate: false — shared modules are evaluated once per worker instead of once per file
+             learn more: https://vitest.dev/guide/improving-performance#test-isolation
+

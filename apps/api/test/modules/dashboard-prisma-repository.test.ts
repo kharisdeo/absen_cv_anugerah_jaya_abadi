@@ -261,8 +261,10 @@ describe('PrismaDashboardRepository', () => {
     });
 
     expect(queries).toHaveLength(1);
-    expect(queries[0]?.sql).toContain('e.id =');
-    expect(queries[0]?.sql).toContain('e.account_id =');
+    expect(queries[0]?.sql).toContain('employee.id =');
+    expect(queries[0]?.sql).toContain('employee.account_id =');
+    expect(/(?:^|[^a-z])e\.id\s*=/.test(queries[0]?.sql ?? '')).toBe(false);
+    expect(/(?:^|[^a-z])e\.account_id\s*=/.test(queries[0]?.sql ?? '')).toBe(false);
     expect(queries[0]?.values).toContain(EMPLOYEE_ID);
     expect(prisma.attendance.findMany).toHaveBeenCalledWith(
       expect.objectContaining({

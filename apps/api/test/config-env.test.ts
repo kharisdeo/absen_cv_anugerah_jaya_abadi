@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+// Keep config tests isolated from any developer-owned repository .env file.
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    existsSync: (path: Parameters<typeof actual.existsSync>[0]) =>
+      String(path).toLowerCase().endsWith('.env') ? false : actual.existsSync(path),
+  };
+});
+
 const secureProductionEnvironment = {
   NODE_ENV: 'production',
   DATABASE_URL: 'postgresql://attendance:test@127.0.0.1:5432/attendance',
@@ -34,6 +44,38 @@ afterEach(() => {
 });
 
 describe('runtime environment security validation', () => {
+  it.each(['staging', 'production'] as const)('accepts secure settings in %s', async (NODE_ENV) => {
+    const { env } = await loadEnvironment({ NODE_ENV });
+
+    expect(env.NODE_ENV).toBe(NODE_ENV);
+    expect(env.DATABASE_URL).toMatch(/^postgresql:/);
+    expect(env.SESSION_SECRET).toHaveLength(32);
+    expect(new Set(env.SESSION_SECRET).size).toBeGreaterThanOrEqual(16);
+    expect(env.APP_ORIGIN).toBe('https://attendance.example.test');
+  });
+
+  it('treats blank optional values as unset in development', async () => {
+    const { env } = await loadEnvironment({
+      NODE_ENV: 'development',
+      DATABASE_URL: '',
+      SESSION_SECRET: '',
+      APP_ORIGIN: '',
+      TIMEZONE: '',
+      FEATURE_FLAGS: '',
+      STORAGE_ENDPOINT: '',
+      STORAGE_BUCKET: '',
+      STORAGE_ACCESS_KEY: '',
+      STORAGE_SECRET_KEY: '',
+    });
+
+    expect(env.DATABASE_URL).toBeUndefined();
+    expect(env.SESSION_SECRET).toBeUndefined();
+    expect(env.APP_ORIGIN).toBe('http://localhost:5173');
+    expect(env.TIMEZONE).toBe('Asia/Jakarta');
+    expect(env.FEATURE_FLAGS).toEqual({});
+    expect(env.STORAGE_BUCKET).toBeUndefined();
+  });
+
   it('defaults an empty TIMEZONE to Asia/Jakarta', async () => {
     const { env } = await loadEnvironment({ TIMEZONE: '' });
 

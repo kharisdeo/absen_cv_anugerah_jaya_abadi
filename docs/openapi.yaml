@@ -639,6 +639,15 @@ paths:
       summary: Catat gangguan sistem
       x-required-roles: [ADMIN]
       x-requires-same-origin: true
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: UUID v4 acak. Pakai ulang hanya untuk retry payload identik.
+          schema:
+            type: string
+            format: uuid
+            pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
       requestBody:
         required: true
         content:
@@ -646,10 +655,20 @@ paths:
             schema: { $ref: '#/components/schemas/SystemDisruptionCreateInput' }
       responses:
         '201':
-          description: Gangguan aktif tercatat dan audit event ditambahkan
+          description: Record gangguan. Replay dengan actor, key, dan payload sama mengembalikan record yang sama.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SystemDisruption' }
+        '400':
+          description: Body atau header idempotency tidak valid
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: Idempotency-Key sudah dipakai untuk payload berbeda
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
   /admin/device-bindings/pending:
@@ -2099,14 +2118,20 @@ components:
           { type: string, format: date-time, description: ISO-8601 timestamp with timezone offset. }
         networkStatus: { type: string, enum: [ONLINE, OFFLINE] }
         location:
-          type: object
-          additionalProperties: false
-          required: [latitude, longitude, accuracyMeters]
-          properties:
-            latitude: { type: number, minimum: -90, maximum: 90, multipleOf: 0.000001 }
-            longitude: { type: number, minimum: -180, maximum: 180, multipleOf: 0.000001 }
-            accuracyMeters:
-              { type: number, exclusiveMinimum: 0, maximum: 999999.99, multipleOf: 0.01 }
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [latitude, longitude, accuracyMeters]
+              properties:
+                latitude: { type: number, minimum: -90, maximum: 90, multipleOf: 0.000001 }
+                longitude: { type: number, minimum: -180, maximum: 180, multipleOf: 0.000001 }
+                accuracyMeters:
+                  { type: number, exclusiveMinimum: 0, maximum: 999999.99, multipleOf: 0.01 }
+            - type: 'null'
+        locationFailureReason:
+          type: string
+          enum: [PERMISSION_DENIED, POSITION_UNAVAILABLE, TIMEOUT]
+          description: Required when location is null; client evidence only, never a validation status.
         validationMethod: { type: string, enum: [GPS, QR, WIFI, SUPERVISOR, OFFLINE, ASSISTED] }
         selfie:
           type: object
@@ -2133,6 +2158,8 @@ components:
         type: { type: string, enum: [CHECK_IN, CHECK_OUT] }
         receivedAt: { $ref: '#/components/schemas/DateTime' }
         replayed: { type: boolean }
+        locationFailureReason:
+          { type: string, enum: [PERMISSION_DENIED, POSITION_UNAVAILABLE, TIMEOUT] }
         attendanceId: { type: string, format: uuid }
         validationStatus:
           { type: string, enum: [VALID, PENDING_VERIFICATION, APPROVED, REJECTED, PENDING_OFFLINE] }

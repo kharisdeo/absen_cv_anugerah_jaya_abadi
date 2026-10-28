@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AttendanceAttemptDraft } from '../src/api/attendance-api.js';
-import { resolveAttendanceSubmissionPlan } from '../src/components/attendance/attendance-submission-model.js';
+import {
+  locationFailureReasonForStatus,
+  resolveAttendanceSubmissionPlan,
+} from '../src/components/attendance/attendance-submission-model.js';
 import { AttendanceSubmitGate } from '../src/components/attendance/attendance-submit-gate.js';
 
 const firstFix = { latitude: -6.2, longitude: 106.8, accuracyMeters: 10 };
@@ -33,7 +36,20 @@ describe('attendance submission model', () => {
       location: retakeFix,
     });
     expect(resolveAttendanceSubmissionPlan(draft, retakeFix)).toEqual({ kind: 'replay', draft });
+    expect(resolveAttendanceSubmissionPlan(null, null, 'PERMISSION_DENIED')).toEqual({
+      kind: 'new',
+      location: null,
+      locationFailureReason: 'PERMISSION_DENIED',
+    });
     expect(resolveAttendanceSubmissionPlan(null, null)).toEqual({ kind: 'blocked' });
+  });
+
+  it.each([
+    ['denied', 'PERMISSION_DENIED'],
+    ['timeout', 'TIMEOUT'],
+    ['unavailable', 'POSITION_UNAVAILABLE'],
+  ] as const)('maps GPS status %s to a bounded API failure reason', (status, reason) => {
+    expect(locationFailureReasonForStatus(status)).toBe(reason);
   });
 
   it('allows only one concurrent submit operation', async () => {

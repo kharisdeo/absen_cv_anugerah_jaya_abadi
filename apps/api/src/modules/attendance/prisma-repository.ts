@@ -35,6 +35,7 @@ const attemptSelect = {
   receivedAt: true,
   processingStatus: true,
   processingErrorCode: true,
+  locationFailureReason: true,
   attendance: { select: { id: true, validationStatus: true } },
 } as const;
 
@@ -233,6 +234,7 @@ function mapAttempt(row: AttendanceAttemptRow): AttendanceAttemptRecord {
     receivedAt: row.receivedAt,
     processingStatus: row.processingStatus,
     processingErrorCode: row.processingErrorCode,
+    locationFailureReason: row.locationFailureReason,
     attendanceId: row.attendance?.id ?? null,
     attendanceValidationStatus: row.attendance?.validationStatus ?? null,
   };
@@ -263,6 +265,40 @@ export class PrismaAttendanceAttemptRepository implements AttendanceAttemptRepos
 
   async createAttempt(data: CreateAttendanceAttemptData) {
     try {
+      let location: Readonly<{
+        latitude: number;
+        longitude: number;
+        accuracyMeters: number;
+      }> | null;
+      if (data.latitude === null || data.longitude === null || data.accuracyMeters === null) {
+        if (
+          data.latitude !== null ||
+          data.longitude !== null ||
+          data.accuracyMeters !== null ||
+          !data.locationFailureReason
+        ) {
+          throw new AppError(
+            400,
+            'INVALID_ATTENDANCE_ATTEMPT',
+            'Bukti lokasi percobaan absensi tidak konsisten.',
+          );
+        }
+        location = null;
+      } else {
+        if (data.locationFailureReason) {
+          throw new AppError(
+            400,
+            'INVALID_ATTENDANCE_ATTEMPT',
+            'Bukti lokasi percobaan absensi tidak konsisten.',
+          );
+        }
+        location = {
+          latitude: data.latitude,
+          longitude: data.longitude,
+          accuracyMeters: data.accuracyMeters,
+        };
+      }
+
       return await this.prisma.$transaction(async (transaction) => {
         const bindings = await transaction.$queryRaw<
           readonly { deviceIdHash: string; fullName: string }[]
@@ -288,28 +324,30 @@ export class PrismaAttendanceAttemptRepository implements AttendanceAttemptRepos
 
         // Assignment and store configuration are read and locked in the same
         // transaction as the attempt insert. Inactive stores are never eligible.
-        const assignedStoreRows = await transaction.$queryRaw<
-          readonly Readonly<{
-            id: string;
-            latitude: string;
-            longitude: string;
-            radiusMeters: number;
-            accuracyLimitMeters: number;
-          }>[]
-        >(Prisma.sql`
-          SELECT
-            s.id::text AS "id",
-            s.latitude::text AS "latitude",
-            s.longitude::text AS "longitude",
-            s.radius_meters AS "radiusMeters",
-            s.accuracy_limit_meters AS "accuracyLimitMeters"
-          FROM employee_stores AS es
-          INNER JOIN stores AS s ON s.id = es.store_id
-          WHERE es.employee_id = ${data.actor.employeeId}::uuid
-            AND s.is_active = TRUE
-          ORDER BY s.id
-          FOR SHARE OF es, s
-        `);
+        const assignedStoreRows = location
+          ? await transaction.$queryRaw<
+              readonly Readonly<{
+                id: string;
+                latitude: string;
+                longitude: string;
+                radiusMeters: number;
+                accuracyLimitMeters: number;
+              }>[]
+            >(Prisma.sql`
+              SELECT
+                s.id::text AS "id",
+                s.latitude::text AS "latitude",
+                s.longitude::text AS "longitude",
+                s.radius_meters AS "radiusMeters",
+                s.accuracy_limit_meters AS "accuracyLimitMeters"
+              FROM employee_stores AS es
+              INNER JOIN stores AS s ON s.id = es.store_id
+              WHERE es.employee_id = ${data.actor.employeeId}::uuid
+                AND s.is_active = TRUE
+              ORDER BY s.id
+              FOR SHARE OF es, s
+            `)
+          : [];
         const stores: ActiveAssignedStore[] = assignedStoreRows.map((store) => ({
           ...store,
           latitude: Number(store.latitude),
@@ -319,25 +357,32 @@ export class PrismaAttendanceAttemptRepository implements AttendanceAttemptRepos
         // Locking the employee row above serializes this existence check with
         // other attempts for the same employee, so concurrent identical fixes
         // cannot both escape the repeated-coordinate flag.
-        const repeatedCoordinateRows = await transaction.$queryRaw<
-          readonly { repeatedCoordinate: boolean }[]
-        >(Prisma.sql`
-          SELECT EXISTS (
-            SELECT 1
-            FROM attendance_attempts
-            WHERE employee_id = ${data.actor.employeeId}::uuid
-              AND latitude = ${data.latitude}::numeric
-              AND longitude = ${data.longitude}::numeric
-          ) AS "repeatedCoordinate"
-        `);
-        const geospatial = assessGeospatialAttempt({
-          stores,
-          storeIdHint: data.storeIdHint,
-          latitude: data.latitude,
-          longitude: data.longitude,
-          accuracyMeters: data.accuracyMeters,
-          repeatedCoordinate: repeatedCoordinateRows[0]?.repeatedCoordinate ?? false,
-        });
+        const repeatedCoordinateRows = location
+          ? await transaction.$queryRaw<readonly { repeatedCoordinate: boolean }[]>(Prisma.sql`
+              SELECT EXISTS (
+                SELECT 1
+                FROM attendance_attempts
+                WHERE employee_id = ${data.actor.employeeId}::uuid
+                  AND latitude = ${location.latitude}::numeric
+                  AND longitude = ${location.longitude}::numeric
+              ) AS "repeatedCoordinate"
+            `)
+          : [];
+        const geospatial = location
+          ? assessGeospatialAttempt({
+              stores,
+              storeIdHint: data.storeIdHint,
+              ...location,
+              repeatedCoordinate: repeatedCoordinateRows[0]?.repeatedCoordinate ?? false,
+            })
+          : {
+              storeId: null,
+              distanceMeters: null,
+              radiusMeters: null,
+              accuracyLimitMeters: null,
+              result: null,
+              repeatedCoordinate: false,
+            };
 
         const row = await transaction.attendanceAttempt.create({
           data: {
@@ -347,9 +392,10 @@ export class PrismaAttendanceAttemptRepository implements AttendanceAttemptRepos
             clientRecordedAt: data.clientRecordedAt,
             networkStatus: data.networkStatus,
             reportedMethod: data.reportedMethod,
-            latitude: data.latitude,
-            longitude: data.longitude,
-            accuracyMeters: data.accuracyMeters,
+            latitude: location?.latitude ?? null,
+            longitude: location?.longitude ?? null,
+            accuracyMeters: location?.accuracyMeters ?? null,
+            locationFailureReason: data.locationFailureReason,
             ...(geospatial.storeId ? { store: { connect: { id: geospatial.storeId } } } : {}),
             distanceMeters: geospatial.distanceMeters,
             geofenceRadiusMeters: geospatial.radiusMeters,
@@ -409,8 +455,9 @@ export class PrismaAttendanceAttemptRepository implements AttendanceAttemptRepos
             watermarkMetadata: {
               employeeName: binding.fullName,
               serverTime: row.receivedAt.toISOString(),
-              latitude: data.latitude,
-              longitude: data.longitude,
+              ...(location
+                ? { latitude: location.latitude, longitude: location.longitude }
+                : { locationFailureReason: data.locationFailureReason }),
             },
           },
         });
@@ -441,6 +488,11 @@ export class PrismaAttendanceAttemptRepository implements AttendanceAttemptRepos
             requestId: data.requestId,
           },
         });
+
+        // A no-fix submission is a durable, owner-scoped pending receipt, not an
+        // attendance event. Keep the staged selfie attached to this attempt and
+        // leave it RECEIVED so the daily-status guard suppresses a false ABSENT.
+        if (!location) return { record: mapAttempt(row), created: true } as const;
 
         const receivedBusinessDate = getBusinessDateAndWeekday(row.receivedAt).businessDate;
         let workDate = receivedBusinessDate;
@@ -671,9 +723,9 @@ export class PrismaAttendanceAttemptRepository implements AttendanceAttemptRepos
         await transaction.locationProof.create({
           data: {
             attendanceId: attendance.id,
-            latitude: data.latitude,
-            longitude: data.longitude,
-            accuracyMeters: data.accuracyMeters,
+            latitude: location.latitude,
+            longitude: location.longitude,
+            accuracyMeters: location.accuracyMeters,
             ...(geospatial.distanceMeters === null
               ? {}
               : { distanceMeters: geospatial.distanceMeters }),

@@ -89,6 +89,14 @@ enum GeofenceResult {
   @@map("geofence_result")
 }
 
+enum LocationFailureReason {
+  PERMISSION_DENIED
+  POSITION_UNAVAILABLE
+  TIMEOUT
+
+  @@map("location_failure_reason")
+}
+
 enum DailyAttendanceStatus {
   PRESENT
   LATE
@@ -450,14 +458,15 @@ model AttendanceAttempt {
   clientRecordedAt          DateTime                          @map("client_recorded_at") @db.Timestamptz(3)
   networkStatus             NetworkStatus                     @map("network_status")
   reportedMethod            ValidationMethod                  @map("reported_method")
-  latitude                  Decimal                           @db.Decimal(9, 6)
-  longitude                 Decimal                           @db.Decimal(9, 6)
-  accuracyMeters            Decimal                           @map("accuracy_meters") @db.Decimal(8, 2)
+  latitude                  Decimal?                          @db.Decimal(9, 6)
+  longitude                 Decimal?                          @db.Decimal(9, 6)
+  accuracyMeters            Decimal?                          @map("accuracy_meters") @db.Decimal(8, 2)
+  locationFailureReason     LocationFailureReason?            @map("location_failure_reason")
   storeId                   String?                           @map("store_id") @db.Uuid
   distanceMeters            Decimal?                          @map("distance_meters") @db.Decimal(14, 6)
   geofenceRadiusMeters      Int?                              @map("geofence_radius_meters")
   accuracyLimitMeters       Int?                              @map("accuracy_limit_meters")
-  geofenceResult            GeofenceResult                    @default(NO_ACTIVE_ASSIGNED_STORE) @map("geofence_result")
+  geofenceResult            GeofenceResult?                   @default(NO_ACTIVE_ASSIGNED_STORE) @map("geofence_result")
   repeatedCoordinate        Boolean                           @default(false) @map("repeated_coordinate")
   selfieReferenceHash       String                            @map("selfie_reference_hash") @db.Char(64)
   selfieSizeBytes           Int                               @map("selfie_size_bytes")
@@ -486,23 +495,26 @@ model AttendanceAttempt {
 /// Private staging metadata and the one-time association to a received attempt.
 /// Only the UUID hash is retained as the client reference; object keys stay server-side.
 model SelfieUploadIntent {
-  referenceHash      String                   @id @map("reference_hash") @db.Char(64)
-  employeeId         String                   @map("employee_id") @db.Uuid
-  deviceBindingId    String                   @map("device_binding_id") @db.Uuid
-  objectKey          String?                  @unique(map: "selfie_upload_intents_object_key_key") @map("object_key")
-  stagingObjectKey   String?                  @map("staging_object_key")
-  sealedObjectKey    String?                  @unique(map: "selfie_upload_intents_sealed_object_key_key") @map("sealed_object_key")
-  contentType        String                   @map("content_type")
-  declaredSizeBytes  Int                      @map("declared_size_bytes")
-  status             SelfieUploadIntentStatus @default(PENDING)
-  expiresAt          DateTime                 @map("expires_at") @db.Timestamptz(3)
-  retentionExpiresAt DateTime?                @map("retention_expires_at") @db.Timestamptz(3)
-  attachedAttemptId  String?                  @unique(map: "selfie_upload_intents_attached_attempt_id_key") @map("attached_attempt_id") @db.Uuid
-  watermarkMetadata  Json?                    @map("watermark_metadata")
-  deletedAt          DateTime?                @map("deleted_at") @db.Timestamptz(3)
-  purgeClaimedAt     DateTime?                @map("purge_claimed_at") @db.Timestamptz(3)
-  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt          DateTime                 @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  referenceHash        String                   @id @map("reference_hash") @db.Char(64)
+  employeeId           String                   @map("employee_id") @db.Uuid
+  deviceBindingId      String                   @map("device_binding_id") @db.Uuid
+  objectKey            String?                  @unique(map: "selfie_upload_intents_object_key_key") @map("object_key")
+  stagingObjectKey     String?                  @map("staging_object_key")
+  sealedObjectKey      String?                  @unique(map: "selfie_upload_intents_sealed_object_key_key") @map("sealed_object_key")
+  contentType          String                   @map("content_type")
+  declaredSizeBytes    Int                      @map("declared_size_bytes")
+  status               SelfieUploadIntentStatus @default(PENDING)
+  expiresAt            DateTime                 @map("expires_at") @db.Timestamptz(3)
+  retentionExpiresAt   DateTime?                @map("retention_expires_at") @db.Timestamptz(3)
+  attachedAttemptId    String?                  @unique(map: "selfie_upload_intents_attached_attempt_id_key") @map("attached_attempt_id") @db.Uuid
+  watermarkMetadata    Json?                    @map("watermark_metadata")
+  watermarkedObjectKey String?                  @unique(map: "selfie_upload_intents_watermarked_object_key_key") @map("watermarked_object_key")
+  watermarkedSizeBytes Int?                     @map("watermarked_size_bytes")
+  watermarkApplied     Boolean                  @default(false) @map("watermark_applied")
+  deletedAt            DateTime?                @map("deleted_at") @db.Timestamptz(3)
+  purgeClaimedAt       DateTime?                @map("purge_claimed_at") @db.Timestamptz(3)
+  createdAt            DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime                 @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   employee        Employee           @relation(fields: [employeeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   deviceBinding   DeviceBinding      @relation(fields: [deviceBindingId], references: [id], onDelete: Restrict, onUpdate: Cascade)
@@ -513,6 +525,7 @@ model SelfieUploadIntent {
   @@index([retentionExpiresAt], map: "selfie_upload_intents_retention_idx")
   @@index([status, retentionExpiresAt], map: "selfie_upload_intents_status_retention_idx")
   @@index([status, createdAt], map: "selfie_upload_intents_status_created_idx")
+  @@index([status, watermarkApplied, createdAt], map: "selfie_upload_intents_watermark_queue_idx")
   @@map("selfie_upload_intents")
 }
 
@@ -618,12 +631,15 @@ model SystemDisruption {
   reason                 String
   isActive               Boolean  @default(true) @map("is_active")
   createdByUserAccountId String   @map("created_by_user_account_id") @db.Uuid
+  idempotencyKeyHash     String?  @map("idempotency_key_hash") @db.Char(64)
+  requestFingerprint     String?  @map("request_fingerprint") @db.Char(64)
   createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt              DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   store   Store?      @relation(fields: [storeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   creator UserAccount @relation("SystemDisruptionCreator", fields: [createdByUserAccountId], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
+  @@unique([createdByUserAccountId, idempotencyKeyHash], map: "system_disruptions_actor_idempotency_key")
   @@index([storeId, isActive, startsAt, endsAt], map: "system_disruptions_store_active_period_idx")
   @@map("system_disruptions")
 }

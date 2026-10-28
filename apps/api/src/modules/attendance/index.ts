@@ -4,6 +4,7 @@ import {
   type AttendanceType,
   type AttendanceAttemptProcessingStatus,
   type AttendanceValidationStatus,
+  type LocationFailureReason,
   type NetworkStatus,
   type ValidationMethod,
 } from '../../generated/prisma/enums.js';
@@ -16,6 +17,11 @@ import { attendanceBusinessRuleErrorFromCode } from './business-rules.js';
 
 const referenceId = z.string().uuid();
 const uuid = z.string().uuid();
+const locationFailureReasonSchema = z.enum([
+  'PERMISSION_DENIED',
+  'POSITION_UNAVAILABLE',
+  'TIMEOUT',
+]);
 
 function hasAtMostDecimalPlaces(value: number, places: number): boolean {
   return Number(value.toFixed(places)) === value;
@@ -58,7 +64,10 @@ const attendanceAttemptBodySchema = z
           .max(999_999.99)
           .refine((value) => hasAtMostDecimalPlaces(value, 2)),
       })
-      .strict(),
+      .strict()
+      .nullable(),
+    /** Untrusted client evidence; it never determines an attendance validation status. */
+    locationFailureReason: locationFailureReasonSchema.optional(),
     validationMethod: z.enum(['GPS', 'QR', 'WIFI', 'SUPERVISOR', 'OFFLINE', 'ASSISTED']),
     selfie: z
       .object({
@@ -76,7 +85,23 @@ const attendanceAttemptBodySchema = z
       .strict(),
     proofCode: z.null().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((input, context) => {
+    if (input.location === null && !input.locationFailureReason) {
+      context.addIssue({
+        code: 'custom',
+        path: ['locationFailureReason'],
+        message: 'Alasan kegagalan lokasi wajib diisi jika koordinat tidak tersedia.',
+      });
+    }
+    if (input.location !== null && input.locationFailureReason) {
+      context.addIssue({
+        code: 'custom',
+        path: ['locationFailureReason'],
+        message: 'Alasan kegagalan lokasi hanya berlaku jika koordinat tidak tersedia.',
+      });
+    }
+  });
 
 export type AttendanceAttemptBody = z.infer<typeof attendanceAttemptBodySchema>;
 export { attendanceAttemptBodySchema };
@@ -92,6 +117,7 @@ export type AttendanceAttemptRecord = Readonly<{
   receivedAt: Date;
   processingStatus: AttendanceAttemptProcessingStatus;
   processingErrorCode: string | null;
+  locationFailureReason: LocationFailureReason | null;
   attendanceId: string | null;
   attendanceValidationStatus: AttendanceValidationStatus | null;
 }>;
@@ -113,9 +139,10 @@ export type CreateAttendanceAttemptData = Readonly<{
   clientRecordedAt: Date;
   networkStatus: NetworkStatus;
   reportedMethod: ValidationMethod;
-  latitude: number;
-  longitude: number;
-  accuracyMeters: number;
+  latitude: number | null;
+  longitude: number | null;
+  accuracyMeters: number | null;
+  locationFailureReason: LocationFailureReason | null;
   selfieReferenceHash: string;
   selfieStagedObjectKey: string;
   selfieSealedObjectKey: string;
@@ -155,6 +182,8 @@ export interface AttendanceEvidenceReferenceVerifier {
       deviceBindingId: string;
     }>,
   ): Promise<VerifiedSelfieReference>;
+  /** Best-effort retry hook for a private derivative; never changes attendance validity. */
+  applyWatermarkForAttempt?(attemptId: string): Promise<void>;
 }
 
 export type AttendanceAttemptContext = Readonly<{
@@ -168,6 +197,7 @@ export type AttendanceAttemptReceipt = Readonly<{
   type: AttendanceType;
   receivedAt: string;
   replayed: boolean;
+  locationFailureReason?: LocationFailureReason;
   attendanceId?: string;
   validationStatus?: AttendanceValidationStatus;
 }>;
@@ -194,11 +224,14 @@ function fingerprint(input: AttendanceAttemptBody, referenceHash: string): strin
     storeIdHint: input.storeId ?? null,
     clientRecordedAt: new Date(input.clientRecordedAt).toISOString(),
     networkStatus: input.networkStatus,
-    location: {
-      latitude: input.location.latitude,
-      longitude: input.location.longitude,
-      accuracyMeters: input.location.accuracyMeters,
-    },
+    location: input.location
+      ? {
+          latitude: input.location.latitude,
+          longitude: input.location.longitude,
+          accuracyMeters: input.location.accuracyMeters,
+        }
+      : null,
+    locationFailureReason: input.locationFailureReason ?? null,
     validationMethod: input.validationMethod,
     selfieReferenceHash: referenceHash,
     selfieSizeKb: input.selfie.sizeKb,
@@ -236,7 +269,11 @@ export class AttendanceAttemptService {
       input.idempotencyKey,
     );
 
-    if (existing) return this.toReceipt(existing, actor, requestFingerprint, true);
+    if (existing) {
+      this.assertAttemptIdentity(existing, actor, requestFingerprint);
+      await this.evidenceVerifier.applyWatermarkForAttempt?.(existing.id);
+      return this.toReceipt(existing, actor, requestFingerprint, true);
+    }
 
     let verifiedReference: VerifiedSelfieReference;
     try {
@@ -278,9 +315,10 @@ export class AttendanceAttemptService {
       clientRecordedAt: new Date(input.clientRecordedAt),
       networkStatus: input.networkStatus,
       reportedMethod: input.validationMethod,
-      latitude: input.location.latitude,
-      longitude: input.location.longitude,
-      accuracyMeters: input.location.accuracyMeters,
+      latitude: input.location?.latitude ?? null,
+      longitude: input.location?.longitude ?? null,
+      accuracyMeters: input.location?.accuracyMeters ?? null,
+      locationFailureReason: input.locationFailureReason ?? null,
       selfieReferenceHash: referenceHash,
       selfieStagedObjectKey: verifiedReference.stagedObjectKey,
       selfieSealedObjectKey: verifiedReference.sealedObjectKey,
@@ -292,7 +330,23 @@ export class AttendanceAttemptService {
       requestId: context.requestId,
     });
 
+    this.assertAttemptIdentity(result.record, actor, requestFingerprint);
+    await this.evidenceVerifier.applyWatermarkForAttempt?.(result.record.id);
     return this.toReceipt(result.record, actor, requestFingerprint, !result.created);
+  }
+
+  private assertAttemptIdentity(
+    record: AttendanceAttemptRecord,
+    actor: AttendanceAttemptActor,
+    requestFingerprint: string,
+  ): void {
+    if (
+      record.employeeId !== actor.employeeId ||
+      record.deviceBindingId !== actor.deviceBindingId ||
+      record.requestFingerprint !== requestFingerprint
+    ) {
+      throw idempotencyConflict();
+    }
   }
 
   private toReceipt(
@@ -301,13 +355,7 @@ export class AttendanceAttemptService {
     requestFingerprint: string,
     replayed: boolean,
   ): AttendanceAttemptReceipt {
-    if (
-      record.employeeId !== actor.employeeId ||
-      record.deviceBindingId !== actor.deviceBindingId ||
-      record.requestFingerprint !== requestFingerprint
-    ) {
-      throw idempotencyConflict();
-    }
+    this.assertAttemptIdentity(record, actor, requestFingerprint);
 
     if (record.processingStatus === 'RULE_REJECTED') {
       const error = attendanceBusinessRuleErrorFromCode(record.processingErrorCode);
@@ -325,6 +373,9 @@ export class AttendanceAttemptService {
       type: record.type,
       receivedAt: record.receivedAt.toISOString(),
       replayed,
+      ...(record.locationFailureReason
+        ? { locationFailureReason: record.locationFailureReason }
+        : {}),
       ...(record.attendanceId ? { attendanceId: record.attendanceId } : {}),
       ...(record.attendanceValidationStatus
         ? { validationStatus: record.attendanceValidationStatus }

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import sharp from 'sharp';
 
 import { DeviceBindingStatus, UserRole } from '../../src/generated/prisma/enums.js';
 import { AppError } from '../../src/errors/app-error.js';
@@ -6,6 +7,7 @@ import type { AuthPrincipal } from '../../src/modules/auth/contracts.js';
 import type {
   CreatePendingSelfieUploadIntentData,
   PendingSelfieUploadIntent,
+  SelfieWatermarkSource,
   SelfieUploadIntentRepository,
 } from '../../src/modules/attendance/selfie-upload.js';
 import {
@@ -49,6 +51,11 @@ class MemoryIntentRepository implements SelfieUploadIntentRepository {
     contentType: string;
     retentionExpiresAt: Date;
     stagingObjectKey?: string | null;
+    watermarkedObjectKey?: string | null;
+    watermarkApplied?: boolean;
+    watermarkedSizeBytes?: number | null;
+    watermarkMetadata?: unknown;
+    sizeBytes?: number;
   }> = [];
 
   async createPending(data: CreatePendingSelfieUploadIntentData) {
@@ -79,11 +86,95 @@ class MemoryIntentRepository implements SelfieUploadIntentRepository {
     );
     return selfie
       ? {
-          objectKey: selfie.objectKey,
-          contentType: selfie.contentType,
+          objectKey:
+            selfie.watermarkApplied === false
+              ? selfie.objectKey
+              : (selfie.watermarkedObjectKey ?? selfie.objectKey),
+          contentType: selfie.watermarkApplied === false ? selfie.contentType : 'image/jpeg',
           retentionExpiresAt: selfie.retentionExpiresAt,
+          watermarkApplied: selfie.watermarkApplied !== false,
         }
       : null;
+  }
+
+  async reserveWatermarkedObjectForAttempt({
+    attemptId,
+    candidateObjectKey,
+    now,
+  }: {
+    attemptId: string;
+    candidateObjectKey: string;
+    now: Date;
+  }): Promise<SelfieWatermarkSource | null> {
+    const selfie = this.attached.find(
+      (candidate) => candidate.attemptId === attemptId && candidate.retentionExpiresAt > now,
+    );
+    if (!selfie) return null;
+    selfie.watermarkedObjectKey ??= candidateObjectKey;
+    return {
+      referenceHash: selfie.referenceHash,
+      objectKey: selfie.objectKey,
+      watermarkedObjectKey: selfie.watermarkedObjectKey,
+      watermarkApplied: selfie.watermarkApplied ?? false,
+      contentType: selfie.contentType,
+      sizeBytes: selfie.sizeBytes ?? INPUT.sizeBytes,
+      retentionExpiresAt: selfie.retentionExpiresAt,
+      watermarkMetadata: selfie.watermarkMetadata ?? {
+        employeeName: 'Karyawan Uji',
+        serverTime: NOW.toISOString(),
+        latitude: -6.2,
+        longitude: 106.8,
+      },
+    };
+  }
+
+  async markWatermarkApplied(input: {
+    attemptId: string;
+    referenceHash: string;
+    originalObjectKey: string;
+    watermarkedObjectKey: string;
+    sizeBytes: number;
+    now: Date;
+  }) {
+    const selfie = this.attached.find((candidate) => candidate.attemptId === input.attemptId);
+    if (!selfie || selfie.watermarkedObjectKey !== input.watermarkedObjectKey) return false;
+    selfie.watermarkApplied = true;
+    selfie.watermarkedSizeBytes = input.sizeBytes;
+    return true;
+  }
+
+  async listPendingWatermarkAttempts({ now, take }: { now: Date; take: number }) {
+    return this.attached
+      .filter((selfie) => selfie.retentionExpiresAt > now && selfie.watermarkApplied === false)
+      .slice(0, take)
+      .map((selfie) => selfie.attemptId);
+  }
+
+  async previewRetentionCandidates({ now, take }: { now: Date; take: number }) {
+    const watermarkCandidates = this.attached.filter(
+      (selfie) => selfie.retentionExpiresAt > now && selfie.watermarkApplied === false,
+    ).length;
+    const attachedStagingCandidates = this.attached.filter(
+      (selfie) => selfie.stagingObjectKey,
+    ).length;
+    const expiredAttachedCandidates = this.attached.filter(
+      (selfie) => selfie.objectKey && selfie.retentionExpiresAt <= now,
+    ).length;
+    const expiredPendingCandidates = [...this.rows.values()].filter(
+      (row) => row.expiresAt <= now,
+    ).length;
+    return {
+      watermarkCandidates: Math.min(watermarkCandidates, take),
+      attachedStagingCandidates: Math.min(attachedStagingCandidates, take),
+      expiredAttachedCandidates: Math.min(expiredAttachedCandidates, take),
+      expiredPendingCandidates: Math.min(expiredPendingCandidates, take),
+      batchLimitHit: {
+        watermark: watermarkCandidates >= take,
+        attachedStaging: attachedStagingCandidates >= take,
+        expiredAttached: expiredAttachedCandidates >= take,
+        expiredPending: expiredPendingCandidates >= take,
+      },
+    };
   }
 
   async listAttachedStaging({ take }: { take: number }) {
@@ -117,9 +208,10 @@ class MemoryIntentRepository implements SelfieUploadIntentRepository {
     return this.attached
       .filter((selfie) => selfie.retentionExpiresAt <= now)
       .slice(0, take)
-      .map(({ referenceHash, attemptId, objectKey }) => ({
+      .map(({ referenceHash, attemptId, objectKey, watermarkedObjectKey }) => ({
         referenceHash,
         objectKey,
+        watermarkedObjectKey: watermarkedObjectKey ?? null,
         attachedAttemptId: attemptId,
       }));
   }
@@ -127,17 +219,20 @@ class MemoryIntentRepository implements SelfieUploadIntentRepository {
   async markAttachedObjectPurged({
     referenceHash,
     objectKey,
+    watermarkedObjectKey,
     attachedAttemptId,
   }: {
     referenceHash: string;
     objectKey: string;
+    watermarkedObjectKey: string | null;
     attachedAttemptId: string | null;
   }) {
     const index = this.attached.findIndex(
       (selfie) =>
         selfie.referenceHash === referenceHash &&
         selfie.attemptId === attachedAttemptId &&
-        selfie.objectKey === objectKey,
+        selfie.objectKey === objectKey &&
+        (selfie.watermarkedObjectKey ?? null) === watermarkedObjectKey,
     );
     if (index < 0) return false;
     this.attached.splice(index, 1);
@@ -291,6 +386,40 @@ describe('selfie upload intent contract', () => {
         objectKey: expect.stringMatching(/^attendance\/selfie-staging\//),
       }),
     );
+  });
+
+  it('previews bounded retention candidates without changing rows or touching storage', async () => {
+    const { service, repository, storage } = harness();
+    await service.createUploadIntent(principal(), INPUT);
+    const row = [...repository.rows.values()][0]!;
+    repository.rows.set(row.referenceHash, { ...row, expiresAt: new Date(NOW.getTime() - 1) });
+    repository.attached.push({
+      referenceHash: 'd'.repeat(64),
+      attemptId: '00000000-0000-4000-8000-000000000091',
+      objectKey: 'attendance/selfie-accepted/expired-preview',
+      stagingObjectKey: 'attendance/selfie-staging/attached-preview',
+      contentType: 'image/jpeg',
+      retentionExpiresAt: new Date(NOW.getTime() - 1),
+    });
+    const rowsBefore = structuredClone([...repository.rows.entries()]);
+
+    await expect(service.previewRetentionCandidates(10, NOW)).resolves.toEqual({
+      previewedAt: NOW.toISOString(),
+      batchSize: 10,
+      watermarkCandidates: 0,
+      attachedStagingCandidates: 1,
+      expiredAttachedCandidates: 1,
+      expiredPendingCandidates: 1,
+      batchLimitHit: {
+        watermark: false,
+        attachedStaging: false,
+        expiredAttached: false,
+        expiredPending: false,
+      },
+    });
+    expect([...repository.rows.entries()]).toEqual(rowsBefore);
+    expect(vi.mocked(storage.deleteObject).mock.calls).toHaveLength(0);
+    expect(vi.mocked(storage.inspectObject).mock.calls).toHaveLength(0);
   });
 
   it('rejects non-employees and missing device bindings before making a signed URL', async () => {
@@ -528,6 +657,7 @@ describe('selfie upload intent contract', () => {
     const findAttached = vi
       .spyOn(repository, 'findAttachedObjectForAttempt')
       .mockResolvedValue(null);
+    const reserveWatermark = vi.spyOn(repository, 'reserveWatermarkedObjectForAttempt');
 
     await expect(
       service.createReviewReadUrl(principal(UserRole.SUPERVISOR), attemptId),
@@ -538,6 +668,103 @@ describe('selfie upload intent contract', () => {
       now: NOW,
       supervisorUserAccountId: ACCOUNT_ID,
     });
+    expect(storage.createReadUrl).not.toHaveBeenCalled();
+    expect(reserveWatermark).not.toHaveBeenCalled();
+  });
+
+  it('stores a private pixel-watermarked derivative and only then exposes that derivative for review', async () => {
+    const { service, repository, storage } = harness();
+    const attemptId = '00000000-0000-4000-8000-000000000058';
+    const referenceHash = '7'.repeat(64);
+    const sourceBytes = await sharp(Buffer.alloc(640 * 480 * 3, 245), {
+      raw: { width: 640, height: 480, channels: 3 },
+    })
+      .jpeg({ quality: 85, mozjpeg: true })
+      .toBuffer();
+    const source = validObject({
+      sizeBytes: sourceBytes.byteLength,
+      bytes: sourceBytes,
+      referenceHash,
+      width: 640,
+      height: 480,
+    });
+    vi.mocked(storage.inspectObject).mockResolvedValue(source);
+    repository.attached.push({
+      referenceHash,
+      attemptId,
+      objectKey: 'attendance/selfie-accepted/original',
+      contentType: 'image/jpeg',
+      sizeBytes: sourceBytes.byteLength,
+      retentionExpiresAt: new Date(NOW.getTime() + 60_000),
+      watermarkMetadata: {
+        employeeName: 'Karyawan DB',
+        serverTime: NOW.toISOString(),
+        locationFailureReason: 'POSITION_UNAVAILABLE',
+      },
+      watermarkApplied: false,
+    });
+
+    await service.createReadUrl(principal(UserRole.ADMIN), attemptId);
+    await service.applyWatermarkForAttempt(attemptId);
+    const [sealedDerivative] = vi.mocked(storage.sealObject).mock.calls[0] ?? [];
+    expect(sealedDerivative).toMatchObject({
+      sealedObjectKey: expect.stringMatching(/^attendance\/selfie-watermarked\//),
+      contentType: 'image/jpeg',
+      referenceHash,
+    });
+    expect(sealedDerivative?.bytes).not.toEqual(sourceBytes);
+    const selfie = repository.attached[0]!;
+    expect(selfie.watermarkApplied).toBe(true);
+    expect(selfie.watermarkedSizeBytes).toBe(sealedDerivative?.bytes.byteLength);
+
+    await service.createReviewReadUrl(principal(UserRole.ADMIN), attemptId);
+    expect(storage.createReadUrl).toHaveBeenCalledWith({
+      objectKey: selfie.watermarkedObjectKey,
+      expiresInSeconds: 60,
+    });
+    expect(storage.createReadUrl).not.toHaveBeenCalledWith(
+      expect.objectContaining({ objectKey: selfie.objectKey }),
+    );
+  });
+
+  it('fails closed on render failure without setting watermarkApplied or signing the original', async () => {
+    const { service, repository, storage } = harness();
+    const attemptId = '00000000-0000-4000-8000-000000000059';
+    const referenceHash = '8'.repeat(64);
+    const sourceBytes = await sharp(Buffer.alloc(320 * 240 * 3, 245), {
+      raw: { width: 320, height: 240, channels: 3 },
+    })
+      .jpeg({ quality: 85, mozjpeg: true })
+      .toBuffer();
+    vi.mocked(storage.inspectObject).mockResolvedValue(
+      validObject({
+        sizeBytes: sourceBytes.byteLength,
+        bytes: sourceBytes,
+        referenceHash,
+        width: 320,
+        height: 240,
+      }),
+    );
+    repository.attached.push({
+      referenceHash,
+      attemptId,
+      objectKey: 'attendance/selfie-accepted/original-render-failure',
+      contentType: 'image/jpeg',
+      sizeBytes: sourceBytes.byteLength,
+      retentionExpiresAt: new Date(NOW.getTime() + 60_000),
+      watermarkMetadata: { employeeName: 'Karyawan DB', serverTime: 'invalid' },
+      watermarkApplied: false,
+    });
+
+    await expect(service.applyWatermarkForAttempt(attemptId)).rejects.toMatchObject({
+      statusCode: 503,
+      code: 'SELFIE_WATERMARK_UNAVAILABLE',
+    });
+    expect(repository.attached[0]?.watermarkApplied).toBe(false);
+    expect(storage.sealObject).not.toHaveBeenCalled();
+    await expect(
+      service.createReviewReadUrl(principal(UserRole.ADMIN), attemptId),
+    ).rejects.toMatchObject({ statusCode: 503, code: 'SELFIE_WATERMARK_UNAVAILABLE' });
     expect(storage.createReadUrl).not.toHaveBeenCalled();
   });
 
@@ -575,6 +802,27 @@ describe('selfie upload intent contract', () => {
     expect(storage.createReadUrl).not.toHaveBeenCalled();
   });
 
+  it('rechecks retention after the watermark lookup before signing a URL', async () => {
+    const times = [NOW, new Date(NOW.getTime() + 2_000)];
+    const { service, repository, storage } = harness({
+      now: () => times.shift() ?? new Date(NOW.getTime() + 2_000),
+    });
+    repository.attached.push({
+      referenceHash: '9'.repeat(64),
+      attemptId: '00000000-0000-4000-8000-000000000060',
+      objectKey: 'attendance/selfie-watermarked/near-expiry',
+      watermarkedObjectKey: 'attendance/selfie-watermarked/near-expiry',
+      watermarkApplied: true,
+      contentType: 'image/jpeg',
+      retentionExpiresAt: new Date(NOW.getTime() + 1_000),
+    });
+
+    await expect(
+      service.createReadUrl(principal(UserRole.ADMIN), '00000000-0000-4000-8000-000000000060'),
+    ).rejects.toMatchObject({ statusCode: 404, code: 'SELFIE_NOT_FOUND' });
+    expect(storage.createReadUrl).not.toHaveBeenCalled();
+  });
+
   it('purges expired attached photos and abandoned staging uploads idempotently', async () => {
     const { service, repository, storage } = harness();
     const receipt = await service.createUploadIntent(principal(), INPUT);
@@ -587,6 +835,8 @@ describe('selfie upload intent contract', () => {
       referenceHash: 'e'.repeat(64),
       attemptId: '00000000-0000-4000-8000-000000000053',
       objectKey: 'attendance/selfie-accepted/expired',
+      watermarkedObjectKey: 'attendance/selfie-watermarked/expired',
+      watermarkApplied: true,
       stagingObjectKey: 'attendance/selfie-staging/accepted-expired',
       contentType: 'image/jpeg',
       retentionExpiresAt: new Date(NOW.getTime() - 1),
@@ -597,7 +847,9 @@ describe('selfie upload intent contract', () => {
 
     expect(first).toEqual({ attachedPurged: 1, stagingPurged: 2, failures: 0 });
     expect(retry).toEqual({ attachedPurged: 0, stagingPurged: 0, failures: 0 });
-    expect(storage.deleteObject).toHaveBeenCalledTimes(4);
+    expect(storage.deleteObject).toHaveBeenCalledTimes(5);
+    expect(storage.deleteObject).toHaveBeenCalledWith('attendance/selfie-accepted/expired');
+    expect(storage.deleteObject).toHaveBeenCalledWith('attendance/selfie-watermarked/expired');
     expect(repository.rows.has(pending.referenceHash)).toBe(false);
     expect(repository.attached).toHaveLength(0);
     expect(receipt.referenceId).toBeTruthy();

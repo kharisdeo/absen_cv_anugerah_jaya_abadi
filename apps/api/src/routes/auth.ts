@@ -147,7 +147,10 @@ export async function registerAuthRoutes(
   options: AuthRoutesOptions,
 ): Promise<void> {
   const base = `${API_PREFIX}/auth`;
-  const loginRateLimit = options.loginRateLimit ?? { max: 10, timeWindow: '15 minutes' };
+  const loginRateLimit = options.loginRateLimit ?? {
+    max: process.env.NODE_ENV === 'development' ? 100 : 10,
+    timeWindow: '15 minutes',
+  };
   const sensitiveRateLimit = options.sensitiveRateLimit ?? {
     max: 5,
     timeWindow: '15 minutes',
@@ -180,7 +183,9 @@ export async function registerAuthRoutes(
   app.post(
     `${base}/logout`,
     {
-      config: { rateLimit: sensitiveRateLimit },
+      // Logout must remain available so a user can recover from an account/device gate.
+      // The request still requires the same-origin check and a valid session below.
+      config: { rateLimit: false },
       preHandler: async (request, reply) => {
         assertAllowedOrigin(request, options);
         await requireSession(request, reply, options, false);

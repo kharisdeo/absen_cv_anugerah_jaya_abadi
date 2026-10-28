@@ -44,8 +44,19 @@ export class PrismaConsentRepository implements ConsentRepository {
     return this.prisma.$transaction(async (tx) => {
       // Serialize this account/policy pair across app instances; no schema uniqueness constraint
       // or migration is required, and a retry after a committed request is idempotent.
+      // Keep the transaction-scoped lock while returning only a Prisma-supported scalar.
+      // Selecting pg_advisory_xact_lock directly exposes PostgreSQL's `void` result type,
+      // which Prisma's PostgreSQL adapter cannot deserialize.
       await tx.$queryRaw(
-        Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${input.userAccountId}), hashtext(${input.policyVersion}))`,
+        Prisma.sql`
+          WITH consent_lock AS MATERIALIZED (
+            SELECT pg_advisory_xact_lock(
+              hashtext(${input.userAccountId}),
+              hashtext(${input.policyVersion})
+            )
+          )
+          SELECT TRUE AS locked FROM consent_lock
+        `,
       );
       const latest = await tx.consentRecord.findFirst({
         where: { userAccountId: input.userAccountId },

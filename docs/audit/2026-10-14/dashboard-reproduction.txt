@@ -1,0 +1,5 @@
+
+Invalid `prisma.$queryRaw()` invocation:
+
+
+Raw query failed. Code: `42P01`. Message: `missing FROM-clause entry for table "e"`

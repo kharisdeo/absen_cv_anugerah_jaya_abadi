@@ -306,7 +306,7 @@ export class AuditService {
   constructor(private readonly repository: AuditLogRepository) {}
 
   /** Builds a server-authored event; occurredAt is deliberately omitted for the DB default. */
-  record(input: RecordAuditEventInput): Promise<AuditLog> {
+  private createData(input: RecordAuditEventInput): AuditLogCreateData {
     const actorUserAccountId = input.actor
       ? normalizeUuid(input.actor.userAccountId, 'actor.userAccountId')
       : null;
@@ -322,7 +322,7 @@ export class AuditService {
       ['store.create', 'store.update', 'store.deactivate'].includes(input.action);
     const beforeData = sanitizeSnapshot(input.before, allowStoreGeofenceCoordinates);
     const afterData = sanitizeSnapshot(input.after, allowStoreGeofenceCoordinates);
-    const data: AuditLogCreateData = {
+    return {
       actorUserAccountId,
       action: normalizeActionOrEntityType(input.action, 'action'),
       entityType: normalizeActionOrEntityType(input.entityType, 'entityType'),
@@ -334,8 +334,18 @@ export class AuditService {
       deviceIdHash: normalizeOptionalText(input.deviceIdHash, 'deviceIdHash', 128),
       requestId: normalizeUuid(input.requestId, 'requestId'),
     };
+  }
 
-    return this.repository.create(data);
+  record(input: RecordAuditEventInput): Promise<AuditLog> {
+    return this.repository.create(this.createData(input));
+  }
+
+  /** Writes through the caller's Prisma transaction so the audited mutation is atomic. */
+  recordInTransaction(
+    transaction: Prisma.TransactionClient,
+    input: RecordAuditEventInput,
+  ): Promise<AuditLog> {
+    return transaction.auditLog.create({ data: this.createData(input) });
   }
 
   /** Read-only, bounded audit listing. The actor is trusted server-side authorization context. */

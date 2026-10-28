@@ -20,6 +20,7 @@ import { useLocationCapture } from './use-location-capture.js';
 import { LocationCaptureNotice } from './LocationCaptureNotice.js';
 import { AttendanceSubmitGate } from './attendance-submit-gate.js';
 import {
+  locationFailureReasonForStatus,
   resolveAttendanceSubmissionPlan,
   shouldOfferFreshCapture,
 } from './attendance-submission-model.js';
@@ -207,6 +208,7 @@ export function CameraCaptureDialog({
     const plan = resolveAttendanceSubmissionPlan(
       attemptDraftRef.current,
       locationSnapshot.location,
+      locationFailureReasonForStatus(locationSnapshot.status),
     );
 
     await submitGateRef.current.run(async () => {
@@ -238,6 +240,7 @@ export function CameraCaptureDialog({
           if (!currentPhoto || plan.kind !== 'new' || !capturedAtRef.current) {
             throw new OfflineQueueError('INVALID_CAPTURE');
           }
+          if (!plan.location) throw new OfflineQueueError('INVALID_CAPTURE');
           const queueId = await offlineQueue.enqueue(employeeId, {
             type: attendanceType,
             clientRecordedAt: capturedAtRef.current,
@@ -275,6 +278,9 @@ export function CameraCaptureDialog({
               clientRecordedAt: capturedAtRef.current,
               photo: currentPhoto.blob,
               location: plan.location,
+              ...(plan.locationFailureReason
+                ? { locationFailureReason: plan.locationFailureReason }
+                : {}),
               liveness: {
                 faceDetected: livenessPassed,
                 passed: livenessPassed,
@@ -357,11 +363,15 @@ export function CameraCaptureDialog({
   );
   const hasPhotoOrDraft = Boolean(snapshot.photo || attemptDraftRef.current);
   const busy = ['preparing', 'uploading', 'sending'].includes(submissionState);
+  const noFixFailureReason = locationFailureReasonForStatus(locationSnapshot.status);
+  const browserOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
   const canSubmit =
     !receipt &&
     !localQueueId &&
     hasPhotoOrDraft &&
-    (Boolean(attemptDraftRef.current) || locationSnapshot.status === 'captured') &&
+    (Boolean(attemptDraftRef.current) ||
+      Boolean(locationSnapshot.location) ||
+      (!browserOffline && noFixFailureReason !== null)) &&
     (submissionState === 'idle' || submissionState === 'error');
   const canRetake = shouldOfferFreshCapture({
     hasReceipt: Boolean(receipt || localQueueId),
@@ -454,6 +464,13 @@ export function CameraCaptureDialog({
       )}
       <LivenessStatusNotice snapshot={snapshot.liveness} />
       {!receipt && <LocationCaptureNotice snapshot={locationSnapshot} />}
+      {!receipt && !locationSnapshot.location && noFixFailureReason !== null && (
+        <p className="camera-dialog__status" role="status">
+          {browserOffline
+            ? 'GPS belum tersedia. Sambungkan internet untuk mengirim upaya ini agar server dapat menyimpan receipt untuk verifikasi.'
+            : 'Anda tetap dapat mengirim upaya ini. Server akan menyimpan receipt untuk verifikasi; absensi belum dinyatakan valid.'}
+        </p>
+      )}
       {locationCanRetry && !receipt && (
         <button
           className="secondary-action-button camera-dialog__action"

@@ -5,7 +5,7 @@ import { z } from 'zod';
 // Load the repository-level .env for local development. Values already provided
 // by the process environment take precedence, which keeps CI and deployments in
 // control of their configuration.
-const localEnvPath = fileURLToPath(new URL('../../../.env', import.meta.url));
+const localEnvPath = fileURLToPath(new URL('../../../../.env', import.meta.url));
 if (existsSync(localEnvPath)) {
   process.loadEnvFile(localEnvPath);
 }

@@ -113,6 +113,7 @@ export async function registerSystemDisruptionRoutes(
           reason: body.data.reason,
           ...(body.data.storeId === undefined ? {} : { storeId: body.data.storeId }),
         },
+        request.headers['idempotency-key'],
         requestContext(request),
       ),
     );

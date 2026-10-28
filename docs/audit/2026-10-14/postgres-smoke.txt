@@ -1,0 +1,5 @@
+$ tsx test/postgres-smoke.ts
+PostgreSQL integration smoke failed: Session cookie must be signed.
+C:\Users\khari\Downloads\absen_cv_anugerah_jaya_abadi\apps\api:
+[ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL] @absen/api@0.1.0 test:postgres: `tsx test/postgres-smoke.ts`
+Exit status 1

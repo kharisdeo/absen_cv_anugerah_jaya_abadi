@@ -7,6 +7,7 @@ import {
 } from '../src/api/system-disruptions-api.js';
 
 const storeId = '00000000-0000-4000-8000-000000000101';
+const idempotencyKey = '10000000-0000-4000-8000-000000000001';
 const disruption = {
   id: '00000000-0000-4000-8000-000000000102',
   storeId: null,
@@ -88,7 +89,7 @@ describe('system disruptions API client', () => {
     };
     fetchMock.mockResolvedValueOnce(jsonResponse(disruption, 201));
 
-    await expect(systemDisruptionsApi.create(input)).resolves.toEqual(disruption);
+    await expect(systemDisruptionsApi.create(input, idempotencyKey)).resolves.toEqual(disruption);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/admin/system-disruptions');
     expect(fetchMock.mock.calls[0]?.[1]).toEqual(
@@ -96,11 +97,19 @@ describe('system disruptions API client', () => {
         method: 'POST',
         credentials: 'include',
         cache: 'no-store',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'Idempotency-Key': idempotencyKey,
+        },
         body: JSON.stringify(input),
       }),
     );
     await expect(
-      systemDisruptionsApi.create({ ...input, startsAt: '2026-10-11T09:00' }),
+      systemDisruptionsApi.create({ ...input, startsAt: '2026-10-11T09:00' }, idempotencyKey),
     ).rejects.toThrow(TypeError);
+    await expect(systemDisruptionsApi.create(input, 'not-a-random-uuid')).rejects.toThrow(
+      TypeError,
+    );
   });
 });
